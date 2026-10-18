@@ -151,12 +151,16 @@ def probe(source: str) -> MediaInfo:
 YT_QUALITY_HEIGHTS = {"Máxima": None, "2160p": 2160, "1440p": 1440, "1080p": 1080, "720p": 720}
 
 
-def youtube_format_args(quality: str, kind: str) -> list[str]:
-    """kind: "merged" (download vídeo+áudio) ou "stream" (player: áudio m4a busca mais rápido).
+def youtube_format_args(quality: str) -> list[str]:
+    """Seleção de formatos para o download e para o player.
+
+    O áudio é sempre Opus quando existe. A faixa AAC do YouTube chega ~36 ms
+    atrasada (o que desalinha as fatias de 250 ms e gera estalos) e tem menos
+    bitrate justamente perto de 12 kHz, onde a inversão espectral guarda os graves.
 
     `-S res:N` usa o MENOR lado do quadro, então funciona também para Shorts verticais.
     """
-    selector = {"merged": "bv*+ba/b", "stream": "bv*+ba[ext=m4a]/bv*+ba/b"}[kind]
+    selector = "bv*+ba[acodec=opus]/bv*+ba/b"
     args = ["-f", selector]
     height = YT_QUALITY_HEIGHTS.get(quality)
     if height:
@@ -174,7 +178,7 @@ class StreamSource:
 
 
 def resolve_youtube_streams(url: str, quality: str) -> StreamSource:
-    cmd = ytdlp_command() + ["-J", "--no-playlist", "--no-warnings", *youtube_format_args(quality, "stream"), url]
+    cmd = ytdlp_command() + ["-J", "--no-playlist", "--no-warnings", *youtube_format_args(quality), url]
     result = subprocess.run(cmd, capture_output=True, text=True, **_popen_flags())
     if result.returncode != 0:
         raise MediaError(f"yt-dlp não conseguiu acessar o vídeo:\n{result.stderr.strip()[-600:]}")
@@ -214,7 +218,7 @@ def download_youtube(url: str, quality: str, dest_dir: Path, cancel: threading.E
     cmd = ytdlp_command() + [
         "--no-playlist", "--no-warnings", "--newline",
         "--progress-template", "download:PCT %(progress._percent_str)s",
-        *youtube_format_args(quality, "merged"),
+        *youtube_format_args(quality),
         "--merge-output-format", "mkv",
         "-o", str(dest_dir / "source.%(ext)s"), url,
     ]
