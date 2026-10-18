@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*_encoded.mp4
+*_decoded.mp4
+.DS_Store
+*.egg-info/
+# Especificação original (versão antiga do código, substituída por este projeto)
+youtube_cipher_gui.pdf
