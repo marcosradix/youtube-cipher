@@ -9,7 +9,7 @@ from typing import Callable
 
 from . import media
 from .audio import AUDIO_LABEL, AUDIO_RATE, BLOCK_SAMPLES, CHANNELS, GROUP_SIZE, HOST_RATE, BlockAssembler, \
-    HalfbandResampler, to_int16, transform_audio_block
+    BoundaryDeclicker, HalfbandResampler, to_int16, transform_audio_block
 from .keys import derive_key, permutation
 from .video import DecodeChecker, Geometry, decode_geometry, deblock, encode_geometry, transform_frame
 
@@ -30,7 +30,7 @@ class CipherSettings:
 @dataclass
 class ExportSettings:
     resolution: str = "1080p"   # preset ou "Auto"
-    crf: int = 16
+    crf: int = 20
     preset: str = "medium"
     deblock: bool = True
     yt_quality: str = "1080p"
@@ -73,6 +73,7 @@ def _process_audio(source: str, wav_path: Path, key: bytes, mode: str, cancel, p
     encode = mode == "encode"
     in_rate, out_rate = (AUDIO_RATE, HOST_RATE) if encode else (HOST_RATE, AUDIO_RATE)
     resampler = HalfbandResampler("up" if encode else "down")
+    declicker = None if encode else BoundaryDeclicker()
     assembler = BlockAssembler()
     done_samples = 0
     total = max(1.0, duration * in_rate)
@@ -84,8 +85,7 @@ def _process_audio(source: str, wav_path: Path, key: bytes, mode: str, cancel, p
         def emit(blocks):
             for block in blocks:
                 out = transform_audio_block(block, index_map)
-                if encode:
-                    out = resampler.process(out)
+                out = resampler.process(out) if encode else declicker.process(out)
                 wav.writeframes(to_int16(out).tobytes())
 
         while True:
@@ -105,8 +105,7 @@ def _process_audio(source: str, wav_path: Path, key: bytes, mode: str, cancel, p
         last = assembler.remainder()
         if last is not None:
             emit([last])
-        if encode:
-            wav.writeframes(to_int16(resampler.flush()).tobytes())
+        wav.writeframes(to_int16(resampler.flush() if encode else declicker.flush()).tobytes())
 
 
 def process_file(mode: str, source: str, output: str, password: str,

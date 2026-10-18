@@ -11,7 +11,7 @@ DEFAULT_CONFIG = {
     "invert_colors": True,
     "scramble_audio": True,
     "resolution": "1080p",
-    "crf": 16,
+    "crf": 20,
     "preset": "medium",
     "deblock": True,
     "yt_quality": "1080p",

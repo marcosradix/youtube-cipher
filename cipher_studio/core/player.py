@@ -24,7 +24,7 @@ from PIL import Image
 
 from . import media
 from .audio import AUDIO_LABEL, AUDIO_RATE, BLOCK_SAMPLES, CHANNELS, GROUP_SIZE, HOST_RATE, BlockAssembler, \
-    HalfbandResampler, transform_audio_block
+    BoundaryDeclicker, HalfbandResampler, transform_audio_block
 from .keys import derive_key, permutation
 from .pipeline import CipherSettings, ExportSettings
 from .video import DecodeChecker, deblock, decode_geometry, transform_frame
@@ -34,6 +34,7 @@ START_BUFFER = 1.0       # segundos carregados para começar a tocar
 REBUFFER = 3.0           # segundos carregados para retomar após o buffer esvaziar
 MAX_BUFFER_BYTES = 800 * 1024 * 1024
 JPEG_QUALITY = 90
+FADE_SECONDS = 0.01      # rampa de volume em pausas, buffer vazio e saltos
 
 
 @dataclass
@@ -151,6 +152,7 @@ class LivePlayer:
         self._alock = threading.Lock()
         self._audio_chunks: deque[tuple[float, np.ndarray]] = deque()
         self._current: np.ndarray | None = None
+        self._gain = 0.0             # ganho da rampa de entrada/saída do áudio
         self._current_t0 = 0.0
         self._current_pos = 0
         self._audio_until = 0.0
@@ -296,6 +298,7 @@ class LivePlayer:
             else:
                 self._current = None
             self._audio_chunks = chunks
+            self._gain = 0.0
             self._epoch += 1
             self._clock.reset(target, self._gen)
             self._clock.set_paused(self._hold)
@@ -376,6 +379,7 @@ class LivePlayer:
             self._audio_chunks.clear()
             self._current = None
             self._current_pos = 0
+            self._gain = 0.0
             self._audio_until = start
             self._audio_eof = self._stream is None
             self._producer_error = None
@@ -492,8 +496,12 @@ class LivePlayer:
         scramble = self.cipher.scramble_audio
         down = HalfbandResampler("down") if scramble else None
         up = HalfbandResampler("up") if (scramble and self._upsample) else None
+        declicker = BoundaryDeclicker() if scramble else None
         assembler = BlockAssembler()
         rate = AUDIO_RATE if scramble else HOST_RATE
+
+        def unscramble(block: np.ndarray) -> np.ndarray:
+            return declicker.process(transform_audio_block(block, self._inv_audio))
         skip = round((start - audio_start) * rate)
         t = audio_start
 
@@ -530,17 +538,18 @@ class LivePlayer:
                         return
                     continue
                 for block in assembler.push(down.process(chunk)):
-                    if not deliver(transform_audio_block(block, self._inv_audio)):
+                    if not deliver(unscramble(block)):
                         return
             else:
                 return  # sessão encerrada antes do fim do arquivo
             # Entrega o que ainda está retido no filtro e no último bloco parcial.
             if scramble:
                 for block in assembler.push(down.flush()):
-                    deliver(transform_audio_block(block, self._inv_audio))
+                    deliver(unscramble(block))
                 last = assembler.remainder()
                 if last is not None:
-                    deliver(transform_audio_block(last, self._inv_audio))
+                    deliver(unscramble(last))
+                deliver(declicker.flush())
             duration = self._src.info.duration
             if duration and self._audio_until < duration - 1.5 and self._request_reopen(gen, self._audio_until):
                 return
@@ -552,7 +561,10 @@ class LivePlayer:
                 self._producer_error = exc
 
     def _audio_callback(self, outdata, frames, _time_info, _status) -> None:
-        if self._hold:
+        # Pausa, buffer vazio e saltos usam rampas de 10 ms: cortar o som no meio
+        # da onda também produz um clique.
+        hold = self._hold
+        if hold and self._gain == 0.0:
             outdata.fill(0)
             return
         written = 0
@@ -565,11 +577,15 @@ class LivePlayer:
                     self._current_t0, self._current = self._audio_chunks.popleft()
                     self._current_pos = 0
                 take = min(frames - written, len(self._current) - self._current_pos)
-                outdata[written:written + take] = self._current[self._current_pos:self._current_pos + take] * self.volume
+                outdata[written:written + take] = self._current[self._current_pos:self._current_pos + take]
                 self._current_pos += take
                 written += take
             exhausted = written < frames and self._audio_eof
         outdata[written:] = 0
+        step = 1.0 / (FADE_SECONDS * self._out_rate) * np.arange(1, frames + 1, dtype=np.float32)
+        gains = np.maximum(0.0, self._gain - step) if hold else np.minimum(1.0, self._gain + step)
+        self._gain = float(gains[-1])
+        outdata *= (gains * self.volume)[:, None]
         self._clock.add_samples(written, gen)
         if exhausted:
             self._clock.switch_to_wall(gen)  # o áudio acabou antes do vídeo

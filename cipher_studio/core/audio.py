@@ -116,6 +116,77 @@ class HalfbandResampler:
         return self.process(np.zeros((pad, self._channels), dtype=np.float32))
 
 
+class BoundaryDeclicker:
+    """Remove cliques nas fronteiras das fatias de 250 ms após o decode.
+
+    No áudio embaralhado cada fronteira é um corte brusco; o codec do YouTube
+    espalha um pouco de erro em volta dele. Em ~1% das fronteiras esse erro vira
+    um clique audível depois de desembaralhar. Aqui, só nos ±2 ms de cada
+    fronteira, um pico de alta frequência muito acima do entorno é substituído
+    por uma versão suavizada (passa-baixas local com transição em cosseno). O
+    resto do áudio não é tocado.
+
+    Processa em fluxo: a saída fica atrasada HOLD amostras (para enxergar os dois
+    lados da fronteira entre blocos), mas as posições continuam alinhadas: a
+    primeira chamada entrega HOLD amostras a menos e flush() entrega o restante.
+    """
+
+    HALF = 48            # ±2 ms a 24 kHz
+    CONTEXT = 1200       # 50 ms de cada lado para medir o "normal" do trecho
+    THRESHOLD = 8.0      # quantas vezes acima do entorno conta como clique
+    HOLD = CONTEXT + HALF + 2
+    _SMOOTH = np.hanning(11)[1:-1] / np.hanning(11)[1:-1].sum()   # passa-baixas ~2,5 kHz
+    _FADE = np.sin(np.linspace(0, np.pi, 2 * HALF)) ** 2           # 0 nas bordas, 1 no centro
+
+    def __init__(self, channels: int = CHANNELS):
+        self._buf = np.zeros((0, channels), dtype=np.float32)
+        self._start = 0          # posição absoluta de _buf[0]
+        self._emitted = 0        # amostras já entregues
+        self._next = SLICE_SAMPLES   # próxima fronteira a examinar (cada uma só uma vez)
+        self.repaired = 0
+
+    def _repair(self, upto: int) -> None:
+        """Examina as fronteiras cujo contexto completo já está em _buf, até a posição `upto`."""
+        while self._next <= upto:
+            b, self._next = self._next, self._next + SLICE_SAMPLES
+            i = b - self._start
+            if i - self.CONTEXT < 0 or i + self.CONTEXT > len(self._buf):
+                continue
+            mono = self._buf[i - self.CONTEXT:i + self.CONTEXT].mean(axis=1)
+            hp = np.abs(np.diff(mono, 2))
+            mid = self.CONTEXT - 1
+            peak = hp[mid - self.HALF:mid + self.HALF].max()
+            if peak <= self.THRESHOLD * (np.median(hp) + 1e-9):
+                continue
+            seg = self._buf[i - self.HALF - 8:i + self.HALF + 8]
+            # Mediana remove o impulso; o passa-baixas alisa o que sobrou.
+            median = np.median(np.lib.stride_tricks.sliding_window_view(seg, 9, axis=0), axis=-1)
+            median = np.concatenate([seg[:4], median, seg[-4:]])
+            smooth = np.stack([np.convolve(median[:, c], self._SMOOTH, mode="same") for c in range(seg.shape[1])], 1)
+            w = self._FADE[:, None]
+            self._buf[i - self.HALF:i + self.HALF] = (1 - w) * seg[8:-8] + w * smooth[8:-8]
+            self.repaired += 1
+
+    def process(self, samples: np.ndarray) -> np.ndarray:
+        self._buf = np.concatenate([self._buf, samples.astype(np.float32)])
+        end = self._start + len(self._buf)
+        self._repair(end - self.CONTEXT)
+        ready = max(0, end - self.HOLD - self._emitted)
+        return self._take(ready)
+
+    def flush(self) -> np.ndarray:
+        return self._take(self._start + len(self._buf) - self._emitted)
+
+    def _take(self, n: int) -> np.ndarray:
+        offset = self._emitted - self._start
+        out = self._buf[offset:offset + n].copy()
+        self._emitted += n
+        # Guarda só o contexto necessário para as próximas fronteiras.
+        keep_from = max(0, self._emitted - self._start - self.HOLD)
+        self._buf, self._start = self._buf[keep_from:], self._start + keep_from
+        return out
+
+
 class BlockAssembler:
     """Junta pedaços de áudio de tamanhos variados em blocos exatos de BLOCK_SAMPLES."""
 

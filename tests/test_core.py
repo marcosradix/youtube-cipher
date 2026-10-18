@@ -207,3 +207,33 @@ def test_playback_clock_follows_audio_and_ignores_old_sessions():
     assert abs(clock.time() - 30.5) < 1e-9
     clock.switch_to_wall(gen=2)              # áudio acabou: segue pelo relógio de parede
     assert clock.time() >= 30.5
+
+
+def _stream_declick(x):
+    from cipher_studio.core.audio import BoundaryDeclicker
+    dk = BoundaryDeclicker()
+    out = np.concatenate([dk.process(x[i:i + 7000]) for i in range(0, len(x), 7000)] + [dk.flush()])
+    return out, dk.repaired
+
+
+def test_declicker_leaves_clean_audio_untouched():
+    t = np.arange(BLOCK_SAMPLES * 2) / 24000
+    tone = (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+    x = np.stack([tone, tone], axis=1)
+    out, repaired = _stream_declick(x)
+    assert len(out) == len(x) and repaired == 0
+    assert np.array_equal(out, x)
+
+
+def test_declicker_removes_click_only_at_slice_boundary():
+    from cipher_studio.core.audio import SLICE_SAMPLES
+    t = np.arange(BLOCK_SAMPLES * 2) / 24000
+    tone = (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+    x = np.stack([tone, tone], axis=1)
+    boundary, middle = SLICE_SAMPLES * 7, SLICE_SAMPLES * 9 + SLICE_SAMPLES // 2
+    x[boundary] += 0.5          # clique na fronteira: deve sumir
+    x[middle] += 0.5            # transiente fora da fronteira: é conteúdo, não mexe
+    out, repaired = _stream_declick(x)
+    assert repaired == 1
+    assert abs(out[boundary, 0] - tone[boundary]) < 0.05
+    assert out[middle, 0] == x[middle, 0]

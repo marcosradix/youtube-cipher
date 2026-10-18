@@ -1,4 +1,4 @@
-# YouTube Cipher Studio 2.1
+# YouTube Cipher Studio 2.2
 
 Embaralha vídeo e áudio para publicação no YouTube e os restaura — em arquivo MP4 ou
 ao vivo, direto do link, sem gravar nada no disco.
@@ -173,6 +173,8 @@ permanece degradado. A imagem não é afetada.
 | "⚠ imagem ainda embaralhada" | Senha, grade ou inversão de cor diferentes das usadas na codificação, ou o vídeo não foi gerado por este programa |
 | "FFmpeg não encontrado" | `brew install ffmpeg` (macOS), `winget install ffmpeg` (Windows), `apt install ffmpeg` (Linux) |
 | Estalos a cada ¼ de segundo e áudio "picotado" no player (versões até 2.1.0) | Atualize. O player usava a faixa AAC do YouTube, que chega ~36 ms atrasada e desalinha as fatias de 250 ms. Desde a 2.1.1 ele usa sempre a faixa Opus |
+| Um clique no som de vez em quando (versões até 2.1.1) | Atualize. Em ~1% das fronteiras das fatias de 250 ms, o erro de compressão do YouTube virava um clique. Desde a 2.2 o decode detecta e suaviza esses picos só nos ±2 ms da fronteira, e o player usa rampas de 10 ms ao pausar, esvaziar o buffer ou saltar |
+| Arquivo codificado muito maior que o original | Normal: o mosaico é difícil de comprimir. Use CRF 20 (padrão desde a 2.2) ou 23 em **🛠 Configurações**. Como o YouTube recomprime tudo, CRF 16 gera um arquivo ~60% maior que o CRF 20 com diferença final imperceptível |
 | Sem som no player | Verifique a saída de áudio padrão do sistema |
 | Reprodução engasgando | Pause e deixe o buffer carregar; se não bastar, em **🛠 Configurações** escolha 720p ou diminua a janela |
 
