@@ -1,4 +1,4 @@
-# YouTube Cipher Studio 2.2
+# YouTube Cipher Studio 2.3
 
 Embaralha vídeo e áudio para publicação no YouTube e os restaura — em arquivo MP4 ou
 ao vivo, direto do link, sem gravar nada no disco.
@@ -96,7 +96,7 @@ A aba **▶ Assistir** decodifica vídeo e áudio em memória e oferece:
 - **Cinco estilos arredondados** para a linha do tempo, trocados na própria barra do player
   (**Estilo**) ou em **🛠 Configurações**: Pílula, Cápsula, Segmentos, Pontos e Gradiente.
   A cor do estilo também é usada nos ícones sobre o vídeo.
-- Botões **⟲10 / 10⟳**, pausa, volume e **tela cheia**.
+- Botões **⟲10 / 10⟳**, pausa, volume e **tela cheia**. Na tela cheia aparece só o vídeo: os controles e o cursor somem após 2,5 s parado e voltam ao mexer o mouse ou clicar (o primeiro clique só traz os controles). O player já decodifica na resolução da tela, então entrar na tela cheia não interrompe o som nem deixa a imagem borrada.
 - **Buffer à frente:** o player carrega e decodifica adiante da reprodução, **inclusive pausado**.
   Para assistir com fluidez numa conexão lenta, pause, espere o trecho carregado crescer
   (tom mais claro na linha do tempo; o status mostra `buffer Ns`) e dê play. O quanto carregar
@@ -173,7 +173,7 @@ permanece degradado. A imagem não é afetada.
 | "⚠ imagem ainda embaralhada" | Senha, grade ou inversão de cor diferentes das usadas na codificação, ou o vídeo não foi gerado por este programa |
 | "FFmpeg não encontrado" | `brew install ffmpeg` (macOS), `winget install ffmpeg` (Windows), `apt install ffmpeg` (Linux) |
 | Estalos a cada ¼ de segundo e áudio "picotado" no player (versões até 2.1.0) | Atualize. O player usava a faixa AAC do YouTube, que chega ~36 ms atrasada e desalinha as fatias de 250 ms. Desde a 2.1.1 ele usa sempre a faixa Opus |
-| Um clique no som de vez em quando (versões até 2.1.1) | Atualize. Em ~1% das fronteiras das fatias de 250 ms, o erro de compressão do YouTube virava um clique. Desde a 2.2 o decode detecta e suaviza esses picos só nos ±2 ms da fronteira, e o player usa rampas de 10 ms ao pausar, esvaziar o buffer ou saltar |
+| Cliques no som (vídeos codificados antes da 2.3) | Codifique o vídeo de novo com a versão 2.3 ou mais nova e publique a nova versão. No formato antigo (v2), cada corte entre fatias de 250 ms era um transiente para o AAC/Opus, que deixava ~30 ms de ruído em volta: medido contra o áudio original de um vídeo real, eram ~18 estouros por minuto. O formato v3 coloca margens de 25 ms (o próprio som espelhado, desvanecendo até zero) em volta de cada fatia, e o corte acontece no silêncio: os estouros caíram para ~2 por minuto, no nível do ruído da medição. Vídeos v2 continuam abrindo (formato detectado automaticamente) |
 | Arquivo codificado muito maior que o original | Normal: o mosaico é difícil de comprimir. Use CRF 20 (padrão desde a 2.2) ou 23 em **🛠 Configurações**. Como o YouTube recomprime tudo, CRF 16 gera um arquivo ~60% maior que o CRF 20 com diferença final imperceptível |
 | Sem som no player | Verifique a saída de áudio padrão do sistema |
 | Reprodução engasgando | Pause e deixe o buffer carregar; se não bastar, em **🛠 Configurações** escolha 720p ou diminua a janela |

@@ -22,6 +22,33 @@ TIMELINE_STYLES = {
 _GRADIENT = ("#22d3ee", "#8b5cf6", "#ec4899")
 
 
+def fullscreen_icon(kind: str, size: int = 20, color: str = "#e8e8e8") -> Image.Image:
+    """Ícone de tela cheia desenhado (cantos para fora = entrar, para dentro = sair).
+
+    Desenhado como imagem porque símbolos Unicode como "🗗" não existem em todas as
+    fontes e aparecem como "?".
+    """
+    from PIL import ImageDraw
+
+    s = size * 4                       # desenha grande e reduz: bordas suaves
+    img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    w, a, b = max(3, s // 9), s * 0.14, s * 0.40   # espessura, borda, comprimento do canto
+    lo, hi = a, s - a
+    corners = [(lo, lo, 1, 1), (hi, lo, -1, 1), (lo, hi, 1, -1), (hi, hi, -1, -1)]
+    for x, y, dx, dy in corners:
+        length = b - a
+        if kind == "exit":            # canto aponta para dentro: o vértice fica deslocado para o centro
+            length = s * 0.19
+            inset = s * 0.36 - a
+            x, y, dx, dy = x + dx * inset, y + dy * inset, -dx, -dy
+        pts = [(x, y + dy * length), (x, y), (x + dx * length, y)]
+        d.line(pts, fill=color, width=w, joint="curve")
+        for px, py in (pts[0], pts[2]):
+            d.ellipse([px - w / 2, py - w / 2, px + w / 2, py + w / 2], fill=color)
+    return img.resize((size * 2, size * 2), Image.LANCZOS)
+
+
 def format_time(seconds: float, reference: float = 0.0) -> str:
     seconds = int(max(0, seconds))
     h, rem = divmod(seconds, 3600)

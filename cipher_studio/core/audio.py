@@ -1,5 +1,20 @@
 """Embaralhamento de áudio: inversão espectral exata + embaralhamento temporal.
 
+Há dois formatos. Vídeos novos usam o v3; o v2 continua sendo decodificado
+(detect_scheme descobre qual é pelo próprio áudio).
+
+v3 (desde a 2.3) — fatias com margens: o áudio original trabalha a 20 kHz e cada
+fatia de 250 ms ganha 25 ms de margem de cada lado, feita com o próprio som da
+fatia espelhado e desvanecendo até zero. O corte entre fatias acontece no
+silêncio, longe do conteúdo: o codec do YouTube não vê transiente e não deixa
+os pequenos estouros de ruído (~30 ms) que o v2 deixava em volta de cada corte
+— ouvidos como cliques. As margens não contêm nada das fatias vizinhas, então
+não revelam a ordem. Com as margens, cada fatia ocupa exatamente 250 ms no
+fluxo a 24 kHz: a duração do áudio continua igual à do vídeo. Custo: banda do
+áudio de 10 kHz (no v2, 12 kHz).
+
+v2 — descrito abaixo, sem margens:
+
 Inversão espectral: a 24 kHz, multiplicar as amostras por (-1)^n espelha o
 espectro em torno de 6 kHz (f -> 12 kHz - f). Graves viram agudos e vice-versa,
 a voz fica irreconhecível, e a operação é a própria inversa — sem a perda e o
@@ -26,19 +41,51 @@ def spectral_invert(samples: np.ndarray) -> np.ndarray:
     return out
 
 
-def pad_block(samples: np.ndarray) -> np.ndarray:
-    """Completa com silêncio até BLOCK_SAMPLES (o último bloco do arquivo)."""
-    missing = BLOCK_SAMPLES - len(samples)
-    if missing <= 0:
-        return samples
-    return np.concatenate([samples, np.zeros((missing, samples.shape[1]), dtype=samples.dtype)])
-
-
 def transform_audio_block(block: np.ndarray, index_map: np.ndarray) -> np.ndarray:
     """Encode com `perm`, decode com `inv_perm`. `block` tem formato (BLOCK_SAMPLES, canais)."""
     channels = block.shape[1]
     slices = spectral_invert(block).reshape(GROUP_SIZE, SLICE_SAMPLES, channels)
     return slices[index_map].reshape(BLOCK_SAMPLES, channels)
+
+
+# ------------------------------------------------------------------
+# Formato v3: fatias com margens espelhadas
+# ------------------------------------------------------------------
+
+CORE_RATE = 20000                                        # taxa do áudio original no v3
+CORE_SAMPLES = CORE_RATE // 4                            # 250 ms de áudio original por fatia
+GUARD_SAMPLES = (SLICE_SAMPLES - CORE_SAMPLES) // 2      # 500 amostras = 25 ms de cada lado
+CORE_BLOCK = CORE_SAMPLES * GROUP_SIZE                   # 5 s a 20 kHz
+AUDIO_LABEL_V3 = f"audio-v3:{GROUP_SIZE}x{CORE_SAMPLES}"
+_GUARD_IN = (np.sin(np.linspace(0, np.pi / 2, GUARD_SAMPLES)) ** 2)[:, None]   # 0 no corte -> 1 na fatia
+_GUARD_OUT = _GUARD_IN[::-1]
+
+
+def encode_block_v3(block: np.ndarray, perm: np.ndarray) -> np.ndarray:
+    """(CORE_BLOCK, canais) a 20 kHz -> (BLOCK_SAMPLES, canais) no fluxo a 24 kHz."""
+    channels = block.shape[1]
+    slices = spectral_invert(block).reshape(GROUP_SIZE, CORE_SAMPLES, channels)[perm]
+    left = slices[:, :GUARD_SAMPLES][:, ::-1] * _GUARD_IN
+    right = slices[:, -GUARD_SAMPLES:][:, ::-1] * _GUARD_OUT
+    return np.concatenate([left, slices, right], axis=1).reshape(BLOCK_SAMPLES, channels)
+
+
+def decode_block_v3(block: np.ndarray, inv: np.ndarray) -> np.ndarray:
+    """(BLOCK_SAMPLES, canais) do fluxo a 24 kHz -> (CORE_BLOCK, canais) a 20 kHz. Descarta as margens."""
+    channels = block.shape[1]
+    slots = block.reshape(GROUP_SIZE, SLICE_SAMPLES, channels)
+    cores = slots[:, GUARD_SAMPLES:GUARD_SAMPLES + CORE_SAMPLES][inv]
+    return spectral_invert(cores.reshape(CORE_BLOCK, channels))
+
+
+def detect_scheme(block: np.ndarray) -> str:
+    """"v3" ou "v2", pela presença das margens espelhadas num bloco do fluxo a 24 kHz."""
+    mono = block.mean(axis=1).reshape(GROUP_SIZE, SLICE_SAMPLES)
+    guard = mono[:, :GUARD_SAMPLES][:, ::-1]                              # = início da fatia × rampa
+    expected = mono[:, GUARD_SAMPLES:2 * GUARD_SAMPLES] * _GUARD_IN[::-1, 0]
+    num = np.sum(guard * expected)
+    den = np.sqrt(np.sum(guard ** 2) * np.sum(expected ** 2)) + 1e-12
+    return "v3" if num / den > 0.5 else "v2"
 
 
 def to_int16(samples: np.ndarray) -> np.ndarray:
@@ -122,19 +169,26 @@ class BoundaryDeclicker:
     No áudio embaralhado cada fronteira é um corte brusco; o codec do YouTube
     espalha um pouco de erro em volta dele. Em ~1% das fronteiras esse erro vira
     um clique audível depois de desembaralhar. Aqui, só nos ±2 ms de cada
-    fronteira, um pico de alta frequência muito acima do entorno é substituído
-    por uma versão suavizada (passa-baixas local com transição em cosseno). O
-    resto do áudio não é tocado.
+    fronteira, um pico de alta frequência enorme (THRESHOLD vezes o entorno) e
+    dominante (o maior transiente da região) é suavizado em ±1 ms. O resto do
+    áudio não é tocado. No áudio real de um vídeo de teste, isso dá ~4 correções
+    por minuto e deixa as fronteiras com a mesma taxa de picos do resto do som.
+
+    Precisa ser conservador: corrigir fronteiras demais apaga os agudos em
+    trechos de 2 ms várias vezes por segundo, e o ouvido percebe cada um como um
+    "tique" — pior que o clique original.
 
     Processa em fluxo: a saída fica atrasada HOLD amostras (para enxergar os dois
     lados da fronteira entre blocos), mas as posições continuam alinhadas: a
     primeira chamada entrega HOLD amostras a menos e flush() entrega o restante.
     """
 
-    HALF = 48            # ±2 ms a 24 kHz
+    DETECT = 48          # procura o pico em ±2 ms da fronteira
+    HALF = 24            # corrige ±1 ms em volta do pico
     CONTEXT = 1200       # 50 ms de cada lado para medir o "normal" do trecho
-    THRESHOLD = 8.0      # quantas vezes acima do entorno conta como clique
-    HOLD = CONTEXT + HALF + 2
+    THRESHOLD = 20.0     # pico precisa ser 20x a mediana do entorno...
+    DOMINANCE = 1.2      # ...e maior que qualquer transiente fora da janela de detecção
+    HOLD = CONTEXT + DETECT + HALF + 10
     _SMOOTH = np.hanning(11)[1:-1] / np.hanning(11)[1:-1].sum()   # passa-baixas ~2,5 kHz
     _FADE = np.sin(np.linspace(0, np.pi, 2 * HALF)) ** 2           # 0 nas bordas, 1 no centro
 
@@ -155,9 +209,12 @@ class BoundaryDeclicker:
             mono = self._buf[i - self.CONTEXT:i + self.CONTEXT].mean(axis=1)
             hp = np.abs(np.diff(mono, 2))
             mid = self.CONTEXT - 1
-            peak = hp[mid - self.HALF:mid + self.HALF].max()
-            if peak <= self.THRESHOLD * (np.median(hp) + 1e-9):
+            window = hp[mid - self.DETECT:mid + self.DETECT]
+            outside = np.concatenate([hp[:mid - self.DETECT], hp[mid + self.DETECT:]])
+            peak = window.max()
+            if peak <= self.THRESHOLD * (np.median(hp) + 1e-9) or peak <= self.DOMINANCE * outside.max():
                 continue
+            i += int(np.argmax(window)) - self.DETECT + 1     # centraliza a correção no pico
             seg = self._buf[i - self.HALF - 8:i + self.HALF + 8]
             # Mediana remove o impulso; o passa-baixas alisa o que sobrou.
             median = np.median(np.lib.stride_tricks.sliding_window_view(seg, 9, axis=0), axis=-1)
@@ -188,22 +245,22 @@ class BoundaryDeclicker:
 
 
 class BlockAssembler:
-    """Junta pedaços de áudio de tamanhos variados em blocos exatos de BLOCK_SAMPLES."""
+    """Junta pedaços de áudio de tamanhos variados em blocos exatos (BLOCK_SAMPLES por padrão)."""
 
-    def __init__(self, channels: int = CHANNELS):
+    def __init__(self, block_size: int = BLOCK_SAMPLES):
         self._parts: list[np.ndarray] = []
         self._size = 0
-        self._channels = channels
+        self._block = block_size
 
     def push(self, samples: np.ndarray) -> list[np.ndarray]:
         self._parts.append(samples)
         self._size += len(samples)
-        if self._size < BLOCK_SAMPLES:
+        if self._size < self._block:
             return []
         data = np.concatenate(self._parts)
-        n_full = len(data) // BLOCK_SAMPLES
-        blocks = [data[i * BLOCK_SAMPLES:(i + 1) * BLOCK_SAMPLES] for i in range(n_full)]
-        rest = data[n_full * BLOCK_SAMPLES:]
+        n_full = len(data) // self._block
+        blocks = [data[i * self._block:(i + 1) * self._block] for i in range(n_full)]
+        rest = data[n_full * self._block:]
         self._parts, self._size = [rest], len(rest)
         return blocks
 
@@ -211,4 +268,110 @@ class BlockAssembler:
         """Último bloco parcial completado com silêncio (None se não sobrou nada)."""
         if self._size == 0:
             return None
-        return pad_block(np.concatenate(self._parts))
+        data = np.concatenate(self._parts)
+        return np.concatenate([data, np.zeros((self._block - len(data), data.shape[1]), dtype=data.dtype)])
+
+
+class RationalResampler:
+    """Conversão de taxa por fração up/down (ex.: 20 -> 48 kHz = 12/5), contínua entre blocos.
+
+    Usada só no domínio do áudio já decodificado, onde nada importante fica na
+    borda da banda; um FIR de Kaiser moderado basta. A saída fica alinhada com a
+    entrada (atraso do filtro compensado).
+    """
+
+    def __init__(self, up: int, down: int, channels: int = CHANNELS, taps_per_phase: int = 96):
+        self._up, self._down = up, down
+        taps = taps_per_phase * max(up, down) + 1
+        cutoff = 0.92 / max(up, down)              # fração da Nyquist da taxa intermediária
+        m = np.arange(taps) - (taps - 1) / 2
+        h = cutoff * np.sinc(cutoff * m) * np.kaiser(taps, 8.0)
+        self._h = up * h / h.sum()                 # ganho `up` compensa os zeros inseridos
+        self._tail = np.zeros((taps - 1, channels))
+        self._skip = (taps - 1) // 2
+        self._emitted = 0
+        self._channels = channels
+        self._spectra: dict[int, np.ndarray] = {}
+
+    def process(self, samples: np.ndarray) -> np.ndarray:
+        if len(samples) == 0:
+            return np.zeros((0, self._channels), dtype=np.float32)
+        stuffed = np.zeros((len(samples) * self._up, self._channels))
+        stuffed[::self._up] = samples
+        buf = np.concatenate([self._tail, stuffed])
+        self._tail = buf[-(len(self._h) - 1):]
+        size = 1 << (len(buf) - 1).bit_length()
+        if size not in self._spectra:
+            self._spectra[size] = np.fft.rfft(self._h, size)
+        y = np.fft.irfft(np.fft.rfft(buf, size, axis=0) * self._spectra[size][:, None], size, axis=0)
+        y = y[len(self._h) - 1:len(buf)]
+        cut = min(self._skip, len(y))
+        y, self._skip = y[cut:], self._skip - cut
+        first = (-self._emitted) % self._down
+        self._emitted += len(y)
+        return y[first::self._down].astype(np.float32)
+
+    def flush(self) -> np.ndarray:
+        pad = -(-(len(self._h) - 1) // 2 // self._up) + 1
+        return self.process(np.zeros((pad, self._channels), dtype=np.float32))
+
+
+class StreamEncoder:
+    """Áudio original a 20 kHz -> fluxo embaralhado v3 a 48 kHz, em blocos de qualquer tamanho."""
+
+    def __init__(self, perm_v3: np.ndarray):
+        self._perm = perm_v3
+        self._asm = BlockAssembler(CORE_BLOCK)
+        self._up = HalfbandResampler("up")
+
+    def process(self, samples: np.ndarray) -> np.ndarray:
+        blocks = self._asm.push(samples)
+        return self._emit(blocks)
+
+    def flush(self) -> np.ndarray:
+        """O último bloco é completado com silêncio: nada do final do áudio é descartado."""
+        last = self._asm.remainder()
+        out = self._emit([last] if last is not None else [])
+        return np.concatenate([out, self._up.flush()])
+
+    def _emit(self, blocks: list[np.ndarray]) -> np.ndarray:
+        parts = [self._up.process(encode_block_v3(b, self._perm)) for b in blocks]
+        return np.concatenate(parts) if parts else np.zeros((0, CHANNELS), dtype=np.float32)
+
+
+class StreamDecoder:
+    """Fluxo embaralhado a 48 kHz -> áudio original, detectando o formato (v2/v3) no primeiro bloco.
+
+    `rate` fica definido após o primeiro bloco: 20 kHz (v3) ou 24 kHz (v2).
+    """
+
+    def __init__(self, inv_v2: np.ndarray, inv_v3: np.ndarray):
+        self._inv_v2, self._inv_v3 = inv_v2, inv_v3
+        self._down = HalfbandResampler("down")
+        self._asm = BlockAssembler(BLOCK_SAMPLES)
+        self._declicker = BoundaryDeclicker()
+        self.scheme: str | None = None
+        self.rate: int | None = None
+
+    def process(self, samples48: np.ndarray) -> np.ndarray:
+        return self._decode(self._asm.push(self._down.process(samples48)))
+
+    def flush(self) -> np.ndarray:
+        blocks = self._asm.push(self._down.flush())
+        last = self._asm.remainder()
+        out = self._decode(blocks + ([last] if last is not None else []))
+        if self.scheme == "v2":
+            out = np.concatenate([out, self._declicker.flush()])
+        return out
+
+    def _decode(self, blocks: list[np.ndarray]) -> np.ndarray:
+        parts = []
+        for block in blocks:
+            if self.scheme is None:
+                self.scheme = detect_scheme(block)
+                self.rate = CORE_RATE if self.scheme == "v3" else AUDIO_RATE
+            if self.scheme == "v3":
+                parts.append(decode_block_v3(block, self._inv_v3).astype(np.float32))
+            else:
+                parts.append(self._declicker.process(transform_audio_block(block, self._inv_v2)))
+        return np.concatenate(parts) if parts else np.zeros((0, CHANNELS), dtype=np.float32)

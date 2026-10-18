@@ -23,14 +23,14 @@ import numpy as np
 from PIL import Image
 
 from . import media
-from .audio import AUDIO_LABEL, AUDIO_RATE, BLOCK_SAMPLES, CHANNELS, GROUP_SIZE, HOST_RATE, BlockAssembler, \
-    BoundaryDeclicker, HalfbandResampler, transform_audio_block
+from .audio import AUDIO_LABEL, AUDIO_LABEL_V3, AUDIO_RATE, BLOCK_SAMPLES, CHANNELS, CORE_RATE, GROUP_SIZE, \
+    HOST_RATE, HalfbandResampler, RationalResampler, StreamDecoder
 from .keys import derive_key, permutation
 from .pipeline import CipherSettings, ExportSettings
 from .video import DecodeChecker, deblock, decode_geometry, transform_frame
 
 BLOCK_SECONDS = BLOCK_SAMPLES / AUDIO_RATE
-START_BUFFER = 1.0       # segundos carregados para começar a tocar
+START_BUFFER = 3.0       # segundos carregados para começar a tocar (o áudio chega em blocos de 5 s)
 REBUFFER = 3.0           # segundos carregados para retomar após o buffer esvaziar
 MAX_BUFFER_BYTES = 800 * 1024 * 1024
 JPEG_QUALITY = 90
@@ -162,8 +162,7 @@ class LivePlayer:
 
         self._clock = PlaybackClock(None)
         self._stream = None
-        self._out_rate = AUDIO_RATE
-        self._upsample = False
+        self._out_rate = HOST_RATE
         self._verdict: bool | None = None
         self._video_maps: dict[str, np.ndarray] = {}
 
@@ -333,7 +332,8 @@ class LivePlayer:
         self._src = (media.resolve_youtube_streams(self.source, self.export.yt_quality) if youtube
                      else media.local_streams(self.source))
         self._update(duration=self._src.info.duration)
-        _, self._inv_audio = permutation(GROUP_SIZE, self._key, AUDIO_LABEL)
+        _, self._inv_v2 = permutation(GROUP_SIZE, self._key, AUDIO_LABEL)
+        _, self._inv_v3 = permutation(GROUP_SIZE, self._key, AUDIO_LABEL_V3)
         if self._src.audio:
             self._open_audio_output()
 
@@ -352,17 +352,10 @@ class LivePlayer:
     def _open_audio_output(self) -> None:
         import sounddevice as sd  # importado aqui: falha só se o player for usado sem PortAudio
 
-        self._out_rate = AUDIO_RATE if self.cipher.scramble_audio else HOST_RATE
-        try:
-            stream = sd.OutputStream(samplerate=self._out_rate, channels=CHANNELS, dtype="float32",
-                                     callback=self._audio_callback, latency="high")
-        except Exception:  # noqa: BLE001 — placa de som sem suporte a 24 kHz
-            if self._out_rate != AUDIO_RATE:
-                raise
-            self._upsample = True
-            self._out_rate = HOST_RATE
-            stream = sd.OutputStream(samplerate=HOST_RATE, channels=CHANNELS, dtype="float32",
-                                     callback=self._audio_callback, latency="high")
+        # Sempre 48 kHz, taxa que toda placa de som aceita; o áudio decodificado é
+        # convertido para ela no produtor.
+        stream = sd.OutputStream(samplerate=HOST_RATE, channels=CHANNELS, dtype="float32",
+                                 callback=self._audio_callback, latency="high")
         self._clock = PlaybackClock(int(stream.samplerate))
         self._clock.latency = float(stream.latency)
         self._clock.set_paused(self._hold)
@@ -494,27 +487,27 @@ class LivePlayer:
 
     def _audio_producer(self, reader: media.AudioReader, gen: int, start: float, audio_start: float) -> None:
         scramble = self.cipher.scramble_audio
-        down = HalfbandResampler("down") if scramble else None
-        up = HalfbandResampler("up") if (scramble and self._upsample) else None
-        declicker = BoundaryDeclicker() if scramble else None
-        assembler = BlockAssembler()
-        rate = AUDIO_RATE if scramble else HOST_RATE
-
-        def unscramble(block: np.ndarray) -> np.ndarray:
-            return declicker.process(transform_audio_block(block, self._inv_audio))
-        skip = round((start - audio_start) * rate)
+        decoder = StreamDecoder(self._inv_v2, self._inv_v3) if scramble else None
+        to_host = None               # conversão para 48 kHz, criada quando o formato é conhecido
+        skip_seconds = start - audio_start
         t = audio_start
 
-        def deliver(samples: np.ndarray) -> bool:
-            nonlocal skip, t
-            if skip:
-                cut = min(skip, len(samples))
-                samples, skip = samples[cut:], skip - cut
+        def deliver(samples: np.ndarray, rate: int) -> bool:
+            """`samples` na taxa `rate` (20/24 kHz decodificado ou 48 kHz original)."""
+            nonlocal skip_seconds, t, to_host
+            if not len(samples):
+                return True
+            if skip_seconds > 0:
+                cut = min(len(samples), round(skip_seconds * rate))
+                samples, skip_seconds = samples[cut:], skip_seconds - cut / rate
                 t += cut / rate
             if not len(samples):
                 return True
-            if up is not None:
-                samples = up.process(samples)
+            if rate != HOST_RATE:
+                if to_host is None:
+                    to_host = (RationalResampler(HOST_RATE // 4000, rate // 4000) if rate == CORE_RATE
+                               else HalfbandResampler("up"))
+                samples = to_host.process(samples)
             samples = np.ascontiguousarray(samples, dtype=np.float32)
             while self._keep_producing(gen) and self._buffer_full(self._audio_until):
                 time.sleep(0.02)
@@ -528,28 +521,21 @@ class LivePlayer:
 
         try:
             while self._keep_producing(gen):
-                chunk = reader.read(BLOCK_SAMPLES * 2 if scramble else HOST_RATE // 10)
+                chunk = reader.read(HOST_RATE * 5 if scramble else HOST_RATE // 10)
                 if chunk is None:
                     if not self._keep_producing(gen):
                         return  # interrompido por salto/parada
                     break
-                if not scramble:
-                    if not deliver(chunk):
-                        return
-                    continue
-                for block in assembler.push(down.process(chunk)):
-                    if not deliver(unscramble(block)):
-                        return
+                delivered = deliver(decoder.process(chunk), decoder.rate) if scramble else deliver(chunk, HOST_RATE)
+                if not delivered:
+                    return
             else:
                 return  # sessão encerrada antes do fim do arquivo
-            # Entrega o que ainda está retido no filtro e no último bloco parcial.
+            # Entrega o que ainda está retido nos filtros e no último bloco parcial.
             if scramble:
-                for block in assembler.push(down.flush()):
-                    deliver(unscramble(block))
-                last = assembler.remainder()
-                if last is not None:
-                    deliver(unscramble(last))
-                deliver(declicker.flush())
+                deliver(decoder.flush(), decoder.rate)
+                if to_host is not None:
+                    deliver(to_host.flush(), HOST_RATE)
             duration = self._src.info.duration
             if duration and self._audio_until < duration - 1.5 and self._request_reopen(gen, self._audio_until):
                 return

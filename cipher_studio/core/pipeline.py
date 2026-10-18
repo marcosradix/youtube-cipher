@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Callable
 
 from . import media
-from .audio import AUDIO_LABEL, AUDIO_RATE, BLOCK_SAMPLES, CHANNELS, GROUP_SIZE, HOST_RATE, BlockAssembler, \
-    BoundaryDeclicker, HalfbandResampler, to_int16, transform_audio_block
+from .audio import AUDIO_LABEL, AUDIO_LABEL_V3, CHANNELS, CORE_RATE, GROUP_SIZE, HOST_RATE, StreamDecoder, \
+    StreamEncoder, to_int16
 from .keys import derive_key, permutation
 from .video import DecodeChecker, Geometry, decode_geometry, deblock, encode_geometry, transform_frame
 
@@ -63,49 +63,45 @@ def _check_cancel(cancel: threading.Event | None) -> None:
 
 def _process_audio(source: str, wav_path: Path, key: bytes, mode: str, cancel, progress: ProgressFn,
                    duration: float, span: tuple[float, float]) -> None:
-    """Encode: lê a 24 kHz, embaralha e grava a 48 kHz. Decode: lê a 48 kHz, desembaralha e grava a 24 kHz.
+    """Encode: lê a 20 kHz e grava o fluxo v3 a 48 kHz. Decode: lê a 48 kHz e grava o original (v2 ou v3).
 
     A conversão 24 <-> 48 kHz usa o HalfbandResampler (e não o do FFmpeg) para
-    preservar os graves, que a inversão espectral coloca logo abaixo de 12 kHz.
+    preservar os graves, que a inversão espectral coloca no topo da banda.
     """
-    perm, inv = permutation(GROUP_SIZE, key, AUDIO_LABEL)
-    index_map = perm if mode == "encode" else inv
     encode = mode == "encode"
-    in_rate, out_rate = (AUDIO_RATE, HOST_RATE) if encode else (HOST_RATE, AUDIO_RATE)
-    resampler = HalfbandResampler("up" if encode else "down")
-    declicker = None if encode else BoundaryDeclicker()
-    assembler = BlockAssembler()
+    perm_v2, inv_v2 = permutation(GROUP_SIZE, key, AUDIO_LABEL)
+    perm_v3, inv_v3 = permutation(GROUP_SIZE, key, AUDIO_LABEL_V3)
+    coder = StreamEncoder(perm_v3) if encode else StreamDecoder(inv_v2, inv_v3)
+    in_rate = CORE_RATE if encode else HOST_RATE
     done_samples = 0
     total = max(1.0, duration * in_rate)
     with media.AudioReader(source, in_rate) as reader, wave.open(str(wav_path), "wb") as wav:
         wav.setnchannels(CHANNELS)
         wav.setsampwidth(2)
-        wav.setframerate(out_rate)
+        rate_set = False
 
-        def emit(blocks):
-            for block in blocks:
-                out = transform_audio_block(block, index_map)
-                out = resampler.process(out) if encode else declicker.process(out)
-                wav.writeframes(to_int16(out).tobytes())
+        def write(samples):
+            nonlocal rate_set
+            if len(samples) == 0:
+                return
+            if not rate_set:
+                # No decode, a taxa só é conhecida após detectar o formato (v2/v3).
+                wav.setframerate(HOST_RATE if encode else coder.rate)
+                rate_set = True
+            wav.writeframes(to_int16(samples).tobytes())
 
         while True:
             _check_cancel(cancel)
-            chunk = reader.read(BLOCK_SAMPLES * (1 if encode else 2))
+            chunk = reader.read(in_rate * 5)
             if chunk is None:
                 break
-            emit(assembler.push(chunk if encode else resampler.process(chunk)))
+            write(coder.process(chunk))
             done_samples += len(chunk)
             fraction = min(1.0, done_samples / total)
             progress(f"Processando áudio: {int(fraction * 100)}%", span[0] + (span[1] - span[0]) * fraction)
         if done_samples == 0:
             raise media.MediaError(f"Não foi possível extrair o áudio:\n{reader.error_text()}")
-        if not encode:
-            emit(assembler.push(resampler.flush()))
-        # O último bloco é completado com silêncio: nada do final do áudio é descartado.
-        last = assembler.remainder()
-        if last is not None:
-            emit([last])
-        wav.writeframes(to_int16(resampler.flush() if encode else declicker.flush()).tobytes())
+        write(coder.flush())
 
 
 def process_file(mode: str, source: str, output: str, password: str,

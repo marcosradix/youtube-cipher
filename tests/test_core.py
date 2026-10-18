@@ -237,3 +237,53 @@ def test_declicker_removes_click_only_at_slice_boundary():
     assert repaired == 1
     assert abs(out[boundary, 0] - tone[boundary]) < 0.05
     assert out[middle, 0] == x[middle, 0]
+
+
+def test_v3_block_roundtrip_and_detection():
+    from cipher_studio.core.audio import CORE_BLOCK, decode_block_v3, detect_scheme, encode_block_v3, AUDIO_LABEL_V3
+    perm, inv = permutation(GROUP_SIZE, KEY, AUDIO_LABEL_V3)
+    rng = np.random.default_rng(5)
+    block = rng.uniform(-0.5, 0.5, (CORE_BLOCK, 2)).astype(np.float32)
+    enc = encode_block_v3(block, perm)
+    assert enc.shape == (BLOCK_SAMPLES, 2)                       # mesma duração no fluxo
+    assert np.array_equal(decode_block_v3(enc, inv), block)
+    assert detect_scheme(enc) == "v3"
+    p2, _ = permutation(GROUP_SIZE, KEY, "audio")
+    assert detect_scheme(transform_audio_block(rng.uniform(-0.5, 0.5, (BLOCK_SAMPLES, 2)), p2)) == "v2"
+
+
+def test_v3_cut_points_are_silent():
+    # O corte entre fatias (início/fim de cada fatia no fluxo) acontece no silêncio.
+    from cipher_studio.core.audio import CORE_BLOCK, SLICE_SAMPLES, encode_block_v3, AUDIO_LABEL_V3
+    perm, _ = permutation(GROUP_SIZE, KEY, AUDIO_LABEL_V3)
+    t = np.arange(CORE_BLOCK) / 20000
+    tone = np.stack([np.sin(2 * np.pi * 300 * t)] * 2, axis=1)
+    enc = encode_block_v3(tone, perm).reshape(GROUP_SIZE, SLICE_SAMPLES, 2)
+    assert np.abs(enc[:, 0]).max() < 1e-6 and np.abs(enc[:, -1]).max() < 1e-3
+
+
+def test_rational_resampler_20k_to_48k():
+    from cipher_studio.core.audio import RationalResampler
+    t = np.arange(40000) / 20000
+    tone = np.stack([np.sin(2 * np.pi * 1000 * t)] * 2, axis=1).astype(np.float32)
+    rs = RationalResampler(12, 5)
+    out = np.concatenate([rs.process(tone[i:i + 7777]) for i in range(0, len(tone), 7777)] + [rs.flush()])
+    assert abs(len(out) - 96000) <= 3
+    expected = np.sin(2 * np.pi * 1000 * np.arange(len(out)) / 48000)
+    assert np.max(np.abs(out[4000:-4000, 0] - expected[4000:-4000])) < 0.01
+
+
+def test_stream_encoder_decoder_roundtrip():
+    from cipher_studio.core.audio import AUDIO_LABEL_V3, CORE_RATE, StreamDecoder, StreamEncoder
+    p3, i3 = permutation(GROUP_SIZE, KEY, AUDIO_LABEL_V3)
+    _, i2 = permutation(GROUP_SIZE, KEY, "audio")
+    t = np.arange(CORE_RATE * 12) / CORE_RATE                  # 12 s: dois blocos e meio
+    tone = np.stack([0.4 * np.sin(2 * np.pi * 440 * t)] * 2, axis=1).astype(np.float32)
+    enc = StreamEncoder(p3)
+    host = np.concatenate([enc.process(tone[i:i + 30000]) for i in range(0, len(tone), 30000)] + [enc.flush()])
+    assert len(host) == 15 * 48000                              # completado até o bloco de 5 s
+    dec = StreamDecoder(i2, i3)
+    out = np.concatenate([dec.process(host[i:i + 50000]) for i in range(0, len(host), 50000)] + [dec.flush()])
+    assert dec.scheme == "v3" and dec.rate == CORE_RATE
+    middle = slice(2000, len(tone) - 2000)
+    assert np.max(np.abs(out[middle] - tone[middle])) < 0.02

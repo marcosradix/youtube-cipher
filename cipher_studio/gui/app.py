@@ -20,7 +20,8 @@ from ..config import DEFAULT_CONFIG, load_config, save_config, to_settings
 from ..core import media
 from ..core.pipeline import Cancelled, process_file
 from ..core.player import LivePlayer
-from .player_widgets import BAR_BG, TIMELINE_STYLES, Timeline, VideoCanvas, format_time
+from .fullscreen import FullscreenView
+from .player_widgets import BAR_BG, TIMELINE_STYLES, Timeline, VideoCanvas, format_time, fullscreen_icon
 from .tutorial import SECTIONS
 
 STYLE_LABELS = {key: label for key, (label, _accent) in TIMELINE_STYLES.items()}
@@ -62,7 +63,7 @@ class YouTubeCipherApp(ctk.CTk):
         self.player: LivePlayer | None = None
         self._frame_lock = threading.Lock()
         self._pending_frame: Image.Image | None = None
-        self._fullscreen = False
+        self._fs_view: FullscreenView | None = None
         self._click_job = None
 
         self.is_converting = False
@@ -200,8 +201,10 @@ class YouTubeCipherApp(ctk.CTk):
                                        font=ctk.CTkFont(family="Menlo", size=13))
         self.time_label.pack(side="left", padx=14)
 
-        self.btn_fullscreen = ctk.CTkButton(controls, text="⛶", width=40, height=34, fg_color="transparent",
-                                            hover_color="#2a2a2a", font=ctk.CTkFont(size=18),
+        enter_icon = fullscreen_icon("enter", 20)
+        self.btn_fullscreen = ctk.CTkButton(controls, text="", width=40, height=34, fg_color="transparent",
+                                            hover_color="#2a2a2a",
+                                            image=ctk.CTkImage(enter_icon, enter_icon, size=(20, 20)),
                                             command=self.toggle_fullscreen)
         self.btn_fullscreen.pack(side="right")
         self.volume_slider = ctk.CTkSlider(controls, from_=0, to=1, width=110, command=self._on_volume)
@@ -233,6 +236,9 @@ class YouTubeCipherApp(ctk.CTk):
         if hasattr(self, "timeline"):
             self.timeline.set_style(style)
             self.video_canvas.set_accent(self.timeline.accent)
+            if self._fs_view is not None:
+                self._fs_view.timeline.set_style(style)
+                self._fs_view.canvas.set_accent(self.timeline.accent)
 
     # ------------------------------------------------------------------
     # ABA: CONVERTER
@@ -629,7 +635,9 @@ class YouTubeCipherApp(ctk.CTk):
         cipher, export = to_settings(self._current_config())
         self.player = LivePlayer(
             source, password, cipher, export,
-            display_width=lambda: self.video_canvas.size[0],
+            # Decodifica na resolução da tela desde o início: entrar em tela cheia não
+            # exige reabrir o vídeo (o que interrompia o som por alguns segundos).
+            display_width=self.winfo_screenwidth,
             on_frame=self._on_player_frame,
             on_done=lambda error: self._ui(self._player_finished, error))
         self.player.volume = float(self.volume_slider.get())
@@ -678,7 +686,7 @@ class YouTubeCipherApp(ctk.CTk):
 
     def _on_player_frame(self, image: Image.Image) -> None:
         """Roda na thread do player: redimensiona aqui para aliviar a thread da interface."""
-        box_w, box_h = self.video_canvas.size
+        box_w, box_h = self._active_canvas().size
         w, h = image.size
         scale = min(box_w / w, box_h / h)
         if abs(scale - 1) > 0.01:
@@ -690,19 +698,22 @@ class YouTubeCipherApp(ctk.CTk):
         with self._frame_lock:
             image, self._pending_frame = self._pending_frame, None
         if image is not None:
-            self.video_canvas.show_frame(image)
+            self._active_canvas().show_frame(image)
         self.after(10, self._pump_video)
 
     def _pump_player(self) -> None:
         """Atualiza tempo, linha do tempo, carregamento e ícones a partir do estado do player."""
         if self.player is not None:
             state = self.player.snapshot()
-            self.time_label.configure(
-                text=f"{format_time(state.position, state.duration)} / {format_time(state.duration, state.duration)}")
+            time_text = f"{format_time(state.position, state.duration)} / {format_time(state.duration, state.duration)}"
+            pause_text = "↻" if state.ended else "▶" if state.paused else "⏸"
+            self.time_label.configure(text=time_text)
             self.timeline.set_progress(state.position, state.duration, state.buffered)
             self.video_canvas.set_buffering(state.buffering and not state.paused and not state.ended)
             self.video_canvas.set_center_icon("replay" if state.ended else "play" if state.paused else None)
-            self.btn_pause.configure(text="↻" if state.ended else "▶" if state.paused else "⏸")
+            self.btn_pause.configure(text=pause_text)
+            if self._fs_view is not None:
+                self._fs_view.update_state(state, time_text, pause_text)
             if state.status:
                 self._set_watch_status(state.status)
         self.after(100, self._pump_player)
@@ -714,8 +725,9 @@ class YouTubeCipherApp(ctk.CTk):
         for button in (self.btn_back, self.btn_pause, self.btn_forward):
             button.configure(state="disabled")
         self.btn_pause.configure(text="⏸")
-        self.video_canvas.set_buffering(False)
-        self.video_canvas.set_center_icon(None)
+        for canvas in {self.video_canvas, self._active_canvas()}:
+            canvas.set_buffering(False)
+            canvas.set_center_icon(None)
         self._set_watch_status("reprodução finalizada" if error is None else f"erro — {error}")
         if error is not None:
             messagebox.showerror("Erro na reprodução", str(error))
@@ -724,28 +736,19 @@ class YouTubeCipherApp(ctk.CTk):
     # TELA CHEIA E ATALHOS
     # ------------------------------------------------------------------
 
+    def _active_canvas(self) -> VideoCanvas:
+        """Onde o vídeo está sendo exibido: a janela de tela cheia, se aberta."""
+        view = self._fs_view
+        return view.canvas if view is not None else self.video_canvas
+
     def toggle_fullscreen(self) -> None:
-        self._fullscreen = not self._fullscreen
-        segmented = getattr(self.tabview, "_segmented_button", None)
-        if self._fullscreen:
+        if self._fs_view is None:
             self.tabview.set("▶ Assistir")
-            self._banner_visible = self.deps_banner.winfo_ismapped()
-            for widget in (self.header, self.deps_banner, self.watch_top, self.watch_status_label):
-                widget.pack_forget()
-            if segmented is not None:
-                segmented.grid_remove()
-            self.attributes("-fullscreen", True)
-            self.btn_fullscreen.configure(text="🗗")
+            self._fs_view = FullscreenView(self)
         else:
-            self.attributes("-fullscreen", False)
-            self.header.pack(fill="x", before=self.tabview)
-            if self._banner_visible:
-                self.deps_banner.pack(fill="x", padx=15, pady=(10, 0), before=self.tabview, ipady=6, ipadx=10)
-            if segmented is not None:
-                segmented.grid()
-            self.watch_top.pack(fill="x", padx=10, pady=8, before=self.player_panel)
-            self.watch_status_label.pack(fill="x", padx=12, pady=(0, 4))
-            self.btn_fullscreen.configure(text="⛶")
+            view, self._fs_view = self._fs_view, None
+            view.destroy()
+            self.focus_force()
 
     def _bind_shortcuts(self) -> None:
         def handler(action):
@@ -761,7 +764,6 @@ class YouTubeCipherApp(ctk.CTk):
         self.bind("<Left>", handler(lambda: self._seek_relative(-10)))
         self.bind("<Right>", handler(lambda: self._seek_relative(10)))
         self.bind("<KeyPress-f>", handler(self.toggle_fullscreen))
-        self.bind("<Escape>", lambda _e: self.toggle_fullscreen() if self._fullscreen else None)
 
     # ------------------------------------------------------------------
 
