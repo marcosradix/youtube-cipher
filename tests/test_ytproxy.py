@@ -36,7 +36,9 @@ class FakeGooglevideo(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        # Como o googlevideo real: às vezes corta a resposta no meio.
+        self.wfile.write(body[:20_000] if cls.calls % 3 == 0 else body)
+        self.close_connection = True
 
 
 @pytest.fixture()
