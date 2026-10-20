@@ -9,6 +9,7 @@ e busca os bytes no YouTube em pedaços, repetindo pedaços que falharem.
 
 from __future__ import annotations
 
+import http.client
 import secrets
 import sys
 import threading
@@ -18,8 +19,8 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-CHUNK = 10 * 1024 * 1024
-RETRIES = 4
+CHUNK = 2 * 1024 * 1024
+RETRIES = 6
 TTL = 6 * 3600
 
 _lock = threading.Lock()
@@ -40,21 +41,45 @@ def _content_length(url: str, headers: dict[str, str]) -> int | None:
         return None
 
 
-def _fetch(url: str, headers: dict[str, str], start: int, end: int) -> bytes:
-    """Baixa os bytes [start, end] em um pedido, com novas tentativas."""
+class _ClientGone(Exception):
+    """O FFmpeg fechou a conexão (pulou para outro ponto ou terminou)."""
+
+
+def _copy(url: str, headers: dict[str, str], start: int, end: int, out) -> int:
+    """Copia os bytes [start, end] para `out` e devolve quantos foram copiados.
+
+    O googlevideo às vezes corta a resposta no meio (IncompleteRead) ou responde 503;
+    o que chegou é aproveitado e o chamador continua do ponto em que parou.
+    """
     sep = "&" if "?" in url else "?"
     req = urllib.request.Request(f"{url}{sep}range={start}-{end}", headers=headers)
     error: Exception | None = None
     for attempt in range(RETRIES):
+        written, cut = 0, False
         try:
             with urllib.request.urlopen(req, timeout=30) as res:
-                return res.read()
+                while True:
+                    try:
+                        buf = res.read(64 * 1024)
+                    except http.client.IncompleteRead as exc:
+                        buf, cut, error = exc.partial, True, exc
+                    if not buf:
+                        break
+                    try:
+                        out.write(buf)
+                    except OSError as exc:
+                        raise _ClientGone from exc
+                    written += len(buf)
+                    if cut:
+                        break
         except urllib.error.HTTPError as exc:
             error = exc
             if exc.code < 500 and exc.code != 429:
                 break
-        except OSError as exc:
+        except (OSError, http.client.HTTPException) as exc:
             error = exc
+        if written:
+            return written
         time.sleep(0.5 * 2 ** attempt)
     raise OSError(f"googlevideo recusou os bytes {start}-{end}: {error}")
 
@@ -115,11 +140,9 @@ class _Handler(BaseHTTPRequestHandler):
         pos, end = span
         try:
             while pos <= end:
-                data = _fetch(url, headers, pos, min(pos + CHUNK - 1, end))
-                if not data:
-                    break
-                self.wfile.write(data)
-                pos += len(data)
+                pos += _copy(url, headers, pos, min(pos + CHUNK - 1, end), self.wfile)
+        except _ClientGone:
+            self.close_connection = True
         except OSError as exc:
             print(f"[ytproxy] {exc}", file=sys.stderr, flush=True)
             self.close_connection = True
