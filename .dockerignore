@@ -1,0 +1,7 @@
+.git
+.venv
+**/__pycache__
+web/node_modules
+web/dist
+tests
+*.mp4
