@@ -177,11 +177,63 @@ class StreamSource:
     headers: dict[str, str] | None = None
 
 
+# Arquivo cookies.txt (formato Netscape) de uma conta do YouTube. Em servidores (Railway,
+# VPS...) o YouTube costuma pedir "Sign in to confirm you're not a bot" para IPs de datacenter;
+# com os cookies de uma conta logada o yt-dlp passa. Definido pela versão web ou por
+# CIPHER_YT_COOKIES_FILE.
+_youtube_cookies: str | None = None
+
+
+def set_youtube_cookies(path: str | None) -> None:
+    global _youtube_cookies
+    _youtube_cookies = path
+
+
+def youtube_cookies_path() -> str | None:
+    path = _youtube_cookies or os.environ.get("CIPHER_YT_COOKIES_FILE")
+    return path if path and os.path.isfile(path) else None
+
+
+def _youtube_auth_args() -> list[str]:
+    path = youtube_cookies_path()
+    if not path:
+        return []
+    # O yt-dlp regrava o arquivo de cookies ao terminar: usa uma cópia por execução
+    # para que processos simultâneos não se atrapalhem.
+    fd, copy = tempfile.mkstemp(prefix="yt_cookies_", suffix=".txt")
+    with os.fdopen(fd, "wb") as out, open(path, "rb") as src:
+        shutil.copyfileobj(src, out)
+    return ["--cookies", copy]
+
+
+def _cleanup_auth_args(args: list[str]) -> None:
+    if args:
+        try:
+            os.remove(args[1])
+        except OSError:
+            pass
+
+
+def _ytdlp_error(prefix: str, text: str) -> MediaError:
+    if "confirm you" in text and "not a bot" in text:
+        hint = ("\n\nO YouTube bloqueou este servidor e pede uma conta logada. "
+                + ("Os cookies configurados não foram aceitos (podem ter expirado): exporte-os de novo."
+                   if youtube_cookies_path() else
+                   "Configure os cookies do YouTube em 🛠 Configurações (versão web) "
+                   "ou em CIPHER_YT_COOKIES_FILE."))
+        return MediaError(f"{prefix}:\n{text}{hint}")
+    return MediaError(f"{prefix}:\n{text}")
+
+
 def resolve_youtube_streams(url: str, quality: str) -> StreamSource:
-    cmd = ytdlp_command() + ["-J", "--no-playlist", "--no-warnings", *youtube_format_args(quality), url]
-    result = subprocess.run(cmd, capture_output=True, text=True, **_popen_flags())
+    auth = _youtube_auth_args()
+    cmd = ytdlp_command() + ["-J", "--no-playlist", "--no-warnings", *auth, *youtube_format_args(quality), url]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, **_popen_flags())
+    finally:
+        _cleanup_auth_args(auth)
     if result.returncode != 0:
-        raise MediaError(f"yt-dlp não conseguiu acessar o vídeo:\n{result.stderr.strip()[-600:]}")
+        raise _ytdlp_error("yt-dlp não conseguiu acessar o vídeo", result.stderr.strip()[-600:])
     info = json.loads(result.stdout)
     formats = info.get("requested_formats") or [info]
     video = next((f for f in formats if f.get("vcodec") not in (None, "none")), None)
@@ -215,8 +267,9 @@ def _terminate_on(event: threading.Event | None, proc: subprocess.Popen) -> None
 def download_youtube(url: str, quality: str, dest_dir: Path, cancel: threading.Event | None = None,
                      on_progress=None) -> Path:
     """Baixa vídeo+áudio na melhor qualidade permitida (VP9/AV1 inclusos) em .mkv."""
+    auth = _youtube_auth_args()
     cmd = ytdlp_command() + [
-        "--no-playlist", "--no-warnings", "--newline",
+        "--no-playlist", "--no-warnings", "--newline", *auth,
         "--progress-template", "download:PCT %(progress._percent_str)s",
         *youtube_format_args(quality),
         "--merge-output-format", "mkv",
@@ -233,10 +286,11 @@ def download_youtube(url: str, quality: str, dest_dir: Path, cancel: threading.E
         elif line.strip():
             tail = (tail + [line.strip()])[-8:]
     proc.wait()
+    _cleanup_auth_args(auth)
     if cancel is not None and cancel.is_set():
         raise MediaError("Download cancelado.")
     if proc.returncode != 0:
-        raise MediaError("Falha no download pelo yt-dlp:\n" + "\n".join(tail))
+        raise _ytdlp_error("Falha no download pelo yt-dlp", "\n".join(tail))
     files = [p for p in dest_dir.glob("source.*") if p.suffix not in (".part", ".ytdl")]
     if not files:
         raise MediaError("O yt-dlp terminou mas nenhum arquivo foi gerado.")

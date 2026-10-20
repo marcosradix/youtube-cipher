@@ -86,3 +86,34 @@ def test_decode_job_and_download(client, encoded):
     assert job["result"]["decode_ok"] is True
     res = client.get(job["result"]["download"])
     assert res.status_code == 200 and b"ftyp" in res.content[:64]
+
+
+COOKIES = ("# Netscape HTTP Cookie File\n"
+           ".youtube.com\tTRUE\t/\tTRUE\t1893456000\tSID\tabc\n"
+           ".youtube.com\tTRUE\t/\tTRUE\t1893456000\tHSID\tdef\n")
+
+
+def test_youtube_cookies_upload_and_use(client):
+    from cipher_studio.core import media
+
+    assert client.get("/api/info").json()["youtube_cookies"]["configured"] is False
+    assert client.put("/api/youtube-cookies", content=b"isto nao e um cookies.txt").status_code == 400
+    res = client.put("/api/youtube-cookies", content=COOKIES.encode())
+    assert res.json() == {"configured": True, "source": "upload"}
+    args = media._youtube_auth_args()
+    assert args[0] == "--cookies" and "SID\tabc" in open(args[1]).read()
+    media._cleanup_auth_args(args)
+    assert client.delete("/api/youtube-cookies").json()["configured"] is False
+    assert media._youtube_auth_args() == []
+
+
+def test_youtube_cookies_from_env_base64(tmp_path, monkeypatch):
+    import base64
+    from cipher_studio.core import media
+
+    monkeypatch.setenv("CIPHER_YT_COOKIES", base64.b64encode(COOKIES.encode()).decode())
+    try:
+        client = TestClient(create_app(tmp_path))
+        assert client.get("/api/info").json()["youtube_cookies"] == {"configured": True, "source": "env"}
+    finally:
+        media.set_youtube_cookies(None)

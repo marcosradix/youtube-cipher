@@ -1,6 +1,8 @@
 // Aba 🛠 Configurações: as mesmas opções do desktop, salvas neste navegador.
+import { useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { Config, ServerInfo } from "../api";
+import { api } from "../api";
+import type { Config, CookiesStatus, ServerInfo } from "../api";
 import { GRID_LABELS, TIMELINE_STYLES } from "../settings";
 
 interface Props {
@@ -26,6 +28,55 @@ function Switch({ checked, onChange, label }: { checked: boolean; onChange: (v: 
       <span className="track" aria-hidden="true" />
       {label}
     </label>
+  );
+}
+
+function YoutubeCookies({ initial }: { initial: CookiesStatus }) {
+  const [status, setStatus] = useState(initial);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const upload = async (file: File | undefined) => {
+    if (!file) return;
+    try {
+      setStatus(await api.uploadCookies(file));
+      setMessage({ ok: true, text: "Cookies salvos. Tente abrir o link do YouTube de novo." });
+    } catch (err) {
+      setMessage({ ok: false, text: (err as Error).message });
+    }
+  };
+
+  const remove = async () => {
+    setStatus(await api.deleteCookies());
+    setMessage(null);
+  };
+
+  return (
+    <Section title="YouTube no servidor"
+             subtitle={"Em servidores na nuvem o YouTube costuma pedir \"confirme que você não é um robô\". " +
+                       "Envie o cookies.txt de uma conta logada (de preferência uma conta secundária) para liberar."}>
+      <label>Cookies do YouTube:</label>
+      <div className="row">
+        <span className={status.configured ? "ok-text" : "muted"}>
+          {status.configured
+            ? `✓ configurados${status.source === "env" ? " (variável CIPHER_YT_COOKIES)" : ""}`
+            : "não configurados"}
+        </span>
+        <button className="btn" onClick={() => inputRef.current?.click()}>Enviar cookies.txt</button>
+        {status.configured && status.source === "upload" && (
+          <button className="btn gray" onClick={remove}>Remover</button>
+        )}
+        <input ref={inputRef} type="file" accept=".txt,text/plain" hidden
+               onChange={(e) => { void upload(e.target.files?.[0]); e.target.value = ""; }} />
+      </div>
+      {message && <div className={`summary ${message.ok ? "ok-text" : "error-text"}`}>{message.text}</div>}
+      <div className="summary muted">
+        Como obter: no computador, abra o YouTube numa janela anônima, faça login, instale a extensão
+        "Get cookies.txt LOCALLY" e exporte os cookies de youtube.com; depois feche a janela anônima sem
+        sair da conta. Enviados por aqui, valem até o servidor reiniciar; para mantê-los após novos deploys,
+        coloque o conteúdo do arquivo na variável CIPHER_YT_COOKIES do Railway.
+      </div>
+    </Section>
   );
 }
 
@@ -79,6 +130,8 @@ export default function SettingsTab({ info, config, updateConfig }: Props) {
           {info.buffer_choices.map((s) => <option key={s} value={s}>{s} s</option>)}
         </select>
       </Section>
+
+      <YoutubeCookies initial={info.youtube_cookies} />
 
       <div className="row center">
         <span className="muted">As configurações são salvas automaticamente neste navegador.</span>

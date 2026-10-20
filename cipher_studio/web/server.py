@@ -147,6 +147,22 @@ def _settings(config: dict):
     return to_settings(merged)
 
 
+def _parse_cookies(data: bytes) -> bytes:
+    """Aceita cookies.txt (formato Netscape), puro ou em base64; recusa qualquer outra coisa."""
+    text = data.strip()
+    if b"\t" not in text:
+        try:
+            text = base64.b64decode(text, validate=True).strip()
+        except ValueError:
+            pass
+    lines = [line for line in text.splitlines() if line.strip() and not line.startswith(b"# ")]
+    rows = [line.split(b"\t") for line in lines if not line.startswith(b"#") or line.startswith(b"#HttpOnly_")]
+    if not rows or any(len(row) != 7 for row in rows) or not any(b"youtube.com" in row[0] for row in rows):
+        raise ApiError(400, "Arquivo inválido: envie o cookies.txt (formato Netscape) exportado com o "
+                            "YouTube aberto e logado.")
+    return text + b"\n"
+
+
 def _safe_name(name: str, default: str) -> str:
     name = re.sub(r"[^\w.\- ()\[\]]+", "_", Path(name or "").name).strip(" .")
     return name or default
@@ -161,6 +177,17 @@ def create_app(work_dir: Path | None = None) -> FastAPI:
     app = FastAPI(title="YouTube Cipher Studio Web", version=__version__, docs_url=None, redoc_url=None)
     app.state.cipher = state
     access_password = os.environ.get("CIPHER_WEB_PASSWORD")
+    cookies_path = state.work_dir / "youtube_cookies.txt"
+    cookies_source = None
+    if os.environ.get("CIPHER_YT_COOKIES"):
+        # Cookies na variável de ambiente (texto ou base64): sobrevivem a reinícios e novos deploys.
+        try:
+            cookies_path.write_bytes(_parse_cookies(os.environ["CIPHER_YT_COOKIES"].encode()))
+            cookies_path.chmod(0o600)
+            media.set_youtube_cookies(str(cookies_path))
+            cookies_source = "env"
+        except ApiError as exc:
+            print(f"Aviso: CIPHER_YT_COOKIES ignorada — {exc.detail}")
 
     @app.middleware("http")
     async def basic_auth(request: Request, call_next):
@@ -215,7 +242,34 @@ def create_app(work_dir: Path | None = None) -> FastAPI:
             "formats": {name: spec["mime"] for name, spec in live.FORMATS.items()},
             "tutorial": [{"title": title, "body": body} for title, body in SECTIONS],
             "max_upload_mb": MAX_UPLOAD_BYTES // (1024 * 1024),
+            "youtube_cookies": youtube_cookies_status(),
         }
+
+    # ---------------- cookies do YouTube ----------------
+
+    def youtube_cookies_status() -> dict:
+        configured = media.youtube_cookies_path() is not None
+        return {"configured": configured, "source": cookies_source if configured else None}
+
+    @app.put("/api/youtube-cookies")
+    async def set_cookies(request: Request):
+        nonlocal cookies_source
+        data = await request.body()
+        if len(data) > 1024 * 1024:
+            raise ApiError(413, "Arquivo de cookies grande demais.")
+        cookies_path.write_bytes(_parse_cookies(data))
+        cookies_path.chmod(0o600)
+        media.set_youtube_cookies(str(cookies_path))
+        cookies_source = "upload"
+        return youtube_cookies_status()
+
+    @app.delete("/api/youtube-cookies")
+    def delete_cookies():
+        nonlocal cookies_source
+        cookies_path.unlink(missing_ok=True)
+        media.set_youtube_cookies(None)
+        cookies_source = None
+        return youtube_cookies_status()
 
     # ---------------- uploads ----------------
 
