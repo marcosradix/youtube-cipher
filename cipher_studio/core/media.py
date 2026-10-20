@@ -60,12 +60,20 @@ def ffprobe_path() -> str:
     return path
 
 
+def _js_runtime_args() -> list[str]:
+    # O YouTube exige resolver um desafio em JavaScript ("n") para liberar os fluxos;
+    # sem isso o googlevideo recusa o download. O yt-dlp usa o Deno por padrão; o Node também serve.
+    if not shutil.which("deno") and shutil.which("node"):
+        return ["--js-runtimes", "node"]
+    return []
+
+
 def ytdlp_command() -> list[str]:
     if importlib.util.find_spec("yt_dlp"):
-        return [sys.executable, "-m", "yt_dlp"]
+        return [sys.executable, "-m", "yt_dlp", *_js_runtime_args()]
     exe = shutil.which("yt-dlp")
     if exe:
-        return [exe]
+        return [exe, *_js_runtime_args()]
     raise MediaError("yt-dlp não encontrado. Instale com: pip install -U yt-dlp")
 
 
@@ -227,13 +235,15 @@ def _ytdlp_error(prefix: str, text: str) -> MediaError:
 
 def resolve_youtube_streams(url: str, quality: str) -> StreamSource:
     auth = _youtube_auth_args()
-    cmd = ytdlp_command() + ["-J", "--no-playlist", "--no-warnings", *auth, *youtube_format_args(quality), url]
+    cmd = ytdlp_command() + ["-J", "--no-playlist", *auth, *youtube_format_args(quality), url]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, **_popen_flags())
     finally:
         _cleanup_auth_args(auth)
     if result.returncode != 0:
         raise _ytdlp_error("yt-dlp não conseguiu acessar o vídeo", result.stderr.strip()[-600:])
+    if "challenge solving failed" in result.stderr:
+        print(f"[yt-dlp] {result.stderr.strip()[-600:]}", file=sys.stderr, flush=True)
     info = json.loads(result.stdout)
     formats = info.get("requested_formats") or [info]
     video = next((f for f in formats if f.get("vcodec") not in (None, "none")), None)

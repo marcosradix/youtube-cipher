@@ -218,6 +218,7 @@ permanece degradado. A imagem não é afetada.
 | Sintoma | Solução |
 |---|---|
 | Outro erro do yt-dlp (formato indisponível, assinatura, etc.) | `pip install -U yt-dlp`, porque o YouTube muda com frequência |
+| "Stream ends prematurely" / "Server returned 5XX" / "n challenge solving failed" | O yt-dlp precisa de um runtime JavaScript para resolver o desafio do YouTube: instale o [Deno](https://deno.com) (ou o Node.js 22+) e rode `pip install -U "yt-dlp[default]"`. A imagem Docker já inclui o Deno. |
 | "⚠ imagem ainda embaralhada" | Senha, grade ou inversão de cor diferentes das usadas na codificação, ou o vídeo não foi gerado por este programa |
 | "FFmpeg não encontrado" | `brew install ffmpeg` (macOS), `winget install ffmpeg` (Windows), `apt install ffmpeg` (Linux) |
 | Estalos a cada ¼ de segundo e áudio "picotado" no player (versões até 2.1.0) | Atualize. O player usava a faixa AAC do YouTube, que chega ~36 ms atrasada e desalinha as fatias de 250 ms. Desde a 2.1.1 ele usa sempre a faixa Opus |
