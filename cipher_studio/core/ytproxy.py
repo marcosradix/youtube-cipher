@@ -10,6 +10,7 @@ e busca os bytes no YouTube em pedaços, repetindo pedaços que falharem.
 from __future__ import annotations
 
 import secrets
+import sys
 import threading
 import time
 import urllib.error
@@ -119,7 +120,8 @@ class _Handler(BaseHTTPRequestHandler):
                     break
                 self.wfile.write(data)
                 pos += len(data)
-        except OSError:
+        except OSError as exc:
+            print(f"[ytproxy] {exc}", file=sys.stderr, flush=True)
             self.close_connection = True
 
 

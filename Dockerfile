@@ -8,6 +8,8 @@ RUN npm run build
 
 FROM python:3.12-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+# Deno: o yt-dlp o usa para resolver o desafio JavaScript do YouTube (sem ele os fluxos são recusados).
+COPY --from=denoland/deno:bin-2.5.6 /deno /usr/local/bin/deno
 WORKDIR /app
 COPY requirements-web.txt ./
 RUN pip install --no-cache-dir -r requirements-web.txt
