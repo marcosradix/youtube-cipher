@@ -1,4 +1,4 @@
-# YouTube Cipher Studio 2.3
+# YouTube Cipher Studio 2.4
 
 Embaralha vídeo e áudio para publicação no YouTube e os restaura — em arquivo MP4 ou
 ao vivo, direto do link, sem gravar nada no disco.
@@ -31,6 +31,7 @@ pip install -r requirements.txt
 
 ```bash
 python youtube_cipher_gui.py                                   # interface gráfica
+python -m cipher_studio web                                    # versão web (veja abaixo)
 python -m cipher_studio encode video.mp4 video_encoded.mp4     # CLI (senha pedida no terminal
 python -m cipher_studio decode "https://youtu.be/..." out.mp4  #      ou via CIPHER_PASSWORD)
 ```
@@ -118,6 +119,48 @@ Ao saltar, o áudio recomeça no início do bloco de 5 s que contém o instante 
 (só blocos inteiros podem ser desembaralhados) e descarta o trecho anterior, então som e imagem
 continuam sincronizados. Em links do YouTube, cada salto leva de 1 a 5 s, dependendo da rede.
 
+## Versão web
+
+A mesma ferramenta no navegador: as quatro abas do desktop (**▶ Assistir**, **⚙️ Converter**,
+**🛠 Configurações** e **📖 Tutorial**), com o mesmo player (linha do tempo nos cinco estilos,
+buffer à frente inclusive pausado, saltos instantâneos dentro do trecho carregado, tela cheia com
+controles que somem, atalhos Espaço, ←/→, F e Esc) e a mesma verificação **✓ decodificação verificada**.
+
+**Como funciona:** um servidor Python (FastAPI) usa o mesmo núcleo (`cipher_studio/core`), e a
+interface é React. O navegador não consegue rodar o `yt-dlp` nem ler os fluxos do YouTube, então
+a decodificação acontece no servidor, que entrega ao navegador um vídeo comum já restaurado
+(H.264/AAC em MP4 fragmentado, ou VP8/Vorbis em WebM quando o navegador não tem H.264). O player
+recebe esse fluxo por Media Source Extensions: cada salto para fora do trecho carregado pede um
+fluxo novo a partir daquele instante. Na conversão, o vídeo é enviado ao servidor e o resultado
+fica disponível para download.
+
+### Rodar localmente
+
+```bash
+pip install -r requirements-web.txt
+cd web && npm install && npm run build && cd ..
+python -m cipher_studio web            # abra http://127.0.0.1:8000
+```
+
+Para desenvolver a interface com recarga automática: deixe o comando acima rodando e, em outro
+terminal, `cd web && npm run dev` (o Vite repassa `/api` para a porta 8000).
+
+### Publicar
+
+```bash
+docker build -t cipher-web .
+docker run -p 8000:8000 -e CIPHER_WEB_PASSWORD=uma-senha-de-acesso cipher-web
+```
+
+- **Use HTTPS.** A senha do vídeo vai até o servidor, que é quem decodifica.
+- **`CIPHER_WEB_PASSWORD`** exige usuário/senha (HTTP Basic, qualquer usuário) em todo o site.
+  Sem ela, qualquer pessoa com o endereço usa o servidor, inclusive a CPU dele.
+- O servidor só abre links do YouTube ou arquivos enviados pela própria página.
+- Arquivos enviados e resultados são apagados após 24 h (`CIPHER_WEB_RETENTION_HOURS`); o limite
+  de envio é 4 GB (`CIPHER_WEB_MAX_UPLOAD_MB`).
+- O servidor decodifica e recodifica o vídeo em tempo real enquanto alguém assiste, então cada
+  espectador ocupa CPU do servidor. Numa máquina modesta, escolha 720p em **🛠 Configurações**.
+
 ## Solução de problemas
 
 ### `CERTIFICATE_VERIFY_FAILED` ao abrir um link do YouTube
@@ -189,6 +232,8 @@ permanece degradado. A imagem não é afetada.
 | `cipher_studio/core/pipeline.py` | encode/decode de arquivos (GUI e CLI) |
 | `cipher_studio/core/player.py` | player ao vivo sincronizado pelo relógio do áudio |
 | `cipher_studio/gui/` | interface CustomTkinter, componentes do player (`player_widgets.py`) e tutorial |
+| `cipher_studio/web/` | servidor da versão web: API, conversões e player ao vivo em MP4/WebM fragmentado (`live.py`) |
+| `web/` | interface React da versão web (player com MSE em `src/player/engine.ts`) |
 
 ## Testes
 

@@ -1,4 +1,4 @@
-"""Linha de comando: python -m cipher_studio [gui|encode|decode] ...
+"""Linha de comando: python -m cipher_studio [gui|web|encode|decode] ...
 
 A senha é lida da variável de ambiente CIPHER_PASSWORD ou pedida no terminal
 (nunca como argumento, para não ficar no histórico do shell).
@@ -29,6 +29,9 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="cipher_studio", description="YouTube Cipher Studio")
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("gui", help="abre a interface gráfica (padrão)")
+    web = sub.add_parser("web", help="inicia a versão web (abra o endereço no navegador)")
+    web.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 para aceitar outras máquinas")
+    web.add_argument("--port", type=int, default=8000)
     for name in ("encode", "decode"):
         p = sub.add_parser(name, help=f"{'codifica' if name == 'encode' else 'decodifica'} um vídeo")
         p.add_argument("input", help="arquivo de vídeo (ou URL do YouTube no decode)")
@@ -48,6 +51,11 @@ def main(argv: list[str] | None = None) -> None:
     if args.command in (None, "gui"):
         from .gui.app import run
         run()
+        return
+    if args.command == "web":
+        from .web.server import run as run_web
+        print(f"YouTube Cipher Studio Web em http://{args.host}:{args.port}")
+        run_web(args.host, args.port)
         return
 
     cipher, export = to_settings(load_config())

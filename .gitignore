@@ -8,3 +8,5 @@ __pycache__/
 *.egg-info/
 # Especificação original (versão antiga do código, substituída por este projeto)
 youtube_cipher_gui.pdf
+web/node_modules/
+web/dist/

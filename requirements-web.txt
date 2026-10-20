@@ -1,0 +1,8 @@
+# Versão web (servidor): python -m cipher_studio web
+# Não precisa de customtkinter/sounddevice: o vídeo é exibido e tocado pelo navegador.
+numpy>=1.26
+pillow>=10.0
+yt-dlp>=2024.10.22
+certifi>=2024.2.2
+fastapi>=0.110
+uvicorn>=0.29
