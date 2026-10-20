@@ -26,6 +26,12 @@ export interface ServerInfo {
   formats: Record<string, string>;
   tutorial: { title: string; body: string }[];
   max_upload_mb: number;
+  youtube_cookies: CookiesStatus;
+}
+
+export interface CookiesStatus {
+  configured: boolean;
+  source: "env" | "upload" | null;
 }
 
 export interface SessionInfo {
@@ -90,6 +96,13 @@ export const api = {
     request<JobInfo>("POST", "/api/jobs", { mode, source, password, output_name: outputName, config }),
   job: (id: string) => request<JobInfo>("GET", `/api/jobs/${id}`),
   cancelJob: (id: string) => request<JobInfo>("POST", `/api/jobs/${id}/cancel`),
+  deleteCookies: () => request<CookiesStatus>("DELETE", "/api/youtube-cookies"),
+  async uploadCookies(file: File): Promise<CookiesStatus> {
+    const res = await fetch("/api/youtube-cookies", { method: "PUT", body: file });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Erro ${res.status}`);
+    return data as CookiesStatus;
+  },
 };
 
 /** Envia um arquivo ao servidor (XHR para ter progresso). */

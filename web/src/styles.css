@@ -156,3 +156,5 @@ button.link:hover:not(:disabled) { background: none; }
   .time { padding: 0 6px; }
   header h1 .muted { display: block; }
 }
+.ok-text { color: #4ade80; }
+.error-text { color: #f87171; }
