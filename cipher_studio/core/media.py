@@ -243,7 +243,13 @@ def resolve_youtube_streams(url: str, quality: str) -> StreamSource:
     fps = video.get("fps") or 30
     media_info = MediaInfo(int(video["width"]), int(video["height"]), str(Fraction(fps).limit_denominator(1001)),
                            float(info.get("duration") or 0), audio is not None)
-    return StreamSource(media_info, video["url"], audio["url"] if audio else None, video.get("http_headers"))
+    headers = video.get("http_headers")
+    if all(f.get("protocol", "https") in ("http", "https") for f in formats):
+        # Pedaços via proxy local, como o yt-dlp faz: o googlevideo recusa leituras longas em servidores.
+        from . import ytproxy
+        return StreamSource(media_info, ytproxy.proxied(video["url"], headers),
+                            ytproxy.proxied(audio["url"], audio.get("http_headers")) if audio else None, None)
+    return StreamSource(media_info, video["url"], audio["url"] if audio else None, headers)
 
 
 def local_streams(path: str) -> StreamSource:
