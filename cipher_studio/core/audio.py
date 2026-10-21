@@ -343,15 +343,22 @@ class StreamDecoder:
     """Fluxo embaralhado a 48 kHz -> áudio original, detectando o formato (v2/v3) no primeiro bloco.
 
     `rate` fica definido após o primeiro bloco: 20 kHz (v3) ou 24 kHz (v2).
+    `scheme` dado de antemão pula a detecção.
     """
 
-    def __init__(self, inv_v2: np.ndarray, inv_v3: np.ndarray):
+    def __init__(self, inv_v2: np.ndarray, inv_v3: np.ndarray, scheme: str | None = None):
         self._inv_v2, self._inv_v3 = inv_v2, inv_v3
         self._down = HalfbandResampler("down")
         self._asm = BlockAssembler(BLOCK_SAMPLES)
         self._declicker = BoundaryDeclicker()
         self.scheme: str | None = None
         self.rate: int | None = None
+        if scheme is not None:     # já conhecido (ex.: detectado no início do vídeo): não detecta de novo
+            self._set_scheme(scheme)
+
+    def _set_scheme(self, scheme: str) -> None:
+        self.scheme = scheme
+        self.rate = CORE_RATE if scheme == "v3" else AUDIO_RATE
 
     def process(self, samples48: np.ndarray) -> np.ndarray:
         return self._decode(self._asm.push(self._down.process(samples48)))
@@ -368,8 +375,7 @@ class StreamDecoder:
         parts = []
         for block in blocks:
             if self.scheme is None:
-                self.scheme = detect_scheme(block)
-                self.rate = CORE_RATE if self.scheme == "v3" else AUDIO_RATE
+                self._set_scheme(detect_scheme(block))
             if self.scheme == "v3":
                 parts.append(decode_block_v3(block, self._inv_v3).astype(np.float32))
             else:
