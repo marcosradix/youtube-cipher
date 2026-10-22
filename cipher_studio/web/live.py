@@ -67,6 +67,9 @@ class LiveSession:
     inv_v2: np.ndarray
     inv_v3: np.ndarray
     verdict: bool | None = None
+    # Formato do áudio (v2/v3), detectado no fluxo que começa em 0 s. Um salto pode cair num
+    # trecho de silêncio, onde a detecção erra e decodifica tudo no formato errado (voz com eco).
+    audio_scheme: str | None = None
     last_used: float = field(default_factory=time.monotonic)
     _stream: "LiveStream | None" = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -239,7 +242,8 @@ class LiveStream:
     def _audio_worker(self, reader: media.AudioReader, audio_start: float) -> None:
         s = self.session
         scramble = s.cipher.scramble_audio
-        decoder = StreamDecoder(s.inv_v2, s.inv_v3) if scramble else None
+        known = None if self.start_time == 0 else s.audio_scheme
+        decoder = StreamDecoder(s.inv_v2, s.inv_v3, known) if scramble else None
         to_host = None
         skip = self.start_time - audio_start
 
@@ -264,6 +268,8 @@ class LiveStream:
                     break
                 if scramble:
                     deliver(decoder.process(chunk), decoder.rate)
+                    if self.start_time == 0 and decoder.scheme:
+                        s.audio_scheme = decoder.scheme
                 else:
                     deliver(chunk, HOST_RATE)
             if scramble and not self._closed.is_set():

@@ -117,3 +117,52 @@ def test_youtube_cookies_from_env_base64(tmp_path, monkeypatch):
         assert client.get("/api/info").json()["youtube_cookies"] == {"configured": True, "source": "env"}
     finally:
         media.set_youtube_cookies(None)
+
+
+@needs_ffmpeg
+def test_seek_into_silence_keeps_audio_scheme(tmp_path):
+    """Um salto que cai num bloco de silêncio não pode trocar o formato do áudio (v3 lido como v2)."""
+    import numpy as np
+    from cipher_studio.core import media
+    from cipher_studio.web import live
+
+    src, enc, quiet = tmp_path / "src.mp4", tmp_path / "enc.mp4", tmp_path / "quiet.mp4"
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error",
+                    "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30:duration=20",
+                    "-f", "lavfi", "-i", "anoisesrc=d=20:c=pink:r=48000:a=0.3,lowpass=f=3000",
+                    "-c:v", "libx264", "-c:a", "aac", "-shortest", str(src)], check=True)
+    process_file("encode", str(src), str(enc), "senha", CipherSettings(),
+                 ExportSettings(resolution="720p", preset="veryfast"))
+    # Silêncio digital no bloco 10–15 s do vídeo publicado (como uma pausa no YouTube).
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(enc), "-c:v", "copy",
+                    "-af", "volume=0:enable='between(t,10,15)'", "-c:a", "aac", "-b:a", "256k", str(quiet)],
+                   check=True)
+    session = live.open_session(str(quiet), "senha", CipherSettings(),
+                                ExportSettings(resolution="720p", preset="veryfast"), 640)
+
+    rate = 20000
+
+    def pcm(path):
+        reader = media.AudioReader(str(path), rate)
+        parts = []
+        while (part := reader.read(rate)) is not None:
+            parts.append(part)
+        reader.close()
+        return np.concatenate(parts)[:, 0]
+
+    def audio_of(start):
+        stream = session.open_stream(start, "webm")
+        path = tmp_path / f"out_{start}.webm"
+        with open(path, "wb") as out:
+            while chunk := stream.read():
+                out.write(chunk)
+        return pcm(path)
+
+    ref = pcm(src)
+    audio_of(0)                                   # o fluxo do início detecta o formato
+    assert session.audio_scheme == "v3"
+    after = audio_of(10.0)[6 * rate:9 * rate]     # 16–19 s, depois do silêncio
+    expected = ref[16 * rate:19 * rate]
+    corr = np.dot(after, expected) / (np.linalg.norm(after) * np.linalg.norm(expected) + 1e-9)
+    assert corr > 0.8, corr
+    session.close()
