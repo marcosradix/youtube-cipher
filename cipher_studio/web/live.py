@@ -15,6 +15,7 @@ instante pedido; os carimbos de tempo começam em zero e o navegador os desloca.
 import math
 import os
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -24,13 +25,15 @@ import numpy as np
 
 from ..core import media
 from ..core.audio import AUDIO_LABEL, AUDIO_LABEL_V3, BLOCK_SAMPLES, AUDIO_RATE, CHANNELS, CORE_RATE, \
-    GROUP_SIZE, HOST_RATE, HalfbandResampler, RationalResampler, StreamDecoder
+    GROUP_SIZE, HOST_RATE, HalfbandResampler, RationalResampler, StreamDecoder, find_block_start
 from ..core.keys import derive_key, permutation
 from ..core.pipeline import CipherSettings, ExportSettings
 from ..core.video import DecodeChecker, Geometry, deblock, decode_geometry, transform_frame
 
 BLOCK_SECONDS = BLOCK_SAMPLES / AUDIO_RATE
 MAX_DISPLAY_WIDTH = 3840
+# Depois de um salto o áudio é lido com esta folga antes do bloco, para achar o início exato dele.
+ALIGN_MARGIN = 0.05
 
 # Formatos de saída: o navegador escolhe o primeiro que o MediaSource dele aceita.
 FORMATS = {
@@ -166,9 +169,12 @@ class LiveStream:
             # Só blocos inteiros de 5 s podem ser desembaralhados: começa no início do bloco.
             audio_start = math.floor(self.start_time / BLOCK_SECONDS) * BLOCK_SECONDS if scramble \
                 else self.start_time
-            reader = media.AudioReader(src.audio, HOST_RATE, audio_start, src.headers)
+            # Num salto, o FFmpeg pode entregar o áudio alguns ms fora do ponto pedido: lê com folga
+            # e reencaixa pelas margens do v3 (o fluxo a partir de 0 s não precisa).
+            lead = min(ALIGN_MARGIN, audio_start) if scramble and self.start_time > 0 else 0.0
+            reader = media.AudioReader(src.audio, HOST_RATE, audio_start - lead, src.headers)
             self._readers.append(reader)
-            self._threads.append(threading.Thread(target=self._audio_worker, args=(reader, audio_start),
+            self._threads.append(threading.Thread(target=self._audio_worker, args=(reader, audio_start, lead),
                                                   daemon=True))
         g = s.geometry
         vf = f"fps={info.fps},scale={g.width}:{g.height}:flags=area,setsar=1"
@@ -239,7 +245,19 @@ class LiveStream:
             except (OSError, ValueError):
                 pass
 
-    def _audio_worker(self, reader: media.AudioReader, audio_start: float) -> None:
+    def _align(self, chunk: np.ndarray, lead: float, scheme: str | None) -> np.ndarray:
+        """Descarta a folga lida antes do bloco; no v3, mede pelo áudio onde o bloco começa de fato."""
+        nominal = round(lead * AUDIO_RATE)
+        found = None
+        if scheme == "v3":
+            down = HalfbandResampler("down")
+            found = find_block_start(np.concatenate([down.process(chunk), down.flush()]), 2 * nominal)
+            if found is not None and found != nominal:
+                print(f"[áudio] salto para {self.start_time:.1f} s: reencaixado em "
+                      f"{(found - nominal) * 1000 / AUDIO_RATE:+.1f} ms", file=sys.stderr, flush=True)
+        return chunk[2 * (nominal if found is None else found):]
+
+    def _audio_worker(self, reader: media.AudioReader, audio_start: float, lead: float = 0.0) -> None:
         s = self.session
         scramble = s.cipher.scramble_audio
         known = None if self.start_time == 0 else s.audio_scheme
@@ -266,6 +284,11 @@ class LiveStream:
                 chunk = reader.read(HOST_RATE * 5 if scramble else HOST_RATE // 10)
                 if chunk is None:
                     break
+                if lead > 0:
+                    extra = reader.read(round(2 * lead * HOST_RATE))
+                    if extra is not None:
+                        chunk = np.concatenate([chunk, extra])
+                    chunk, lead = self._align(chunk, lead, decoder.scheme), 0.0
                 if scramble:
                     deliver(decoder.process(chunk), decoder.rate)
                     if self.start_time == 0 and decoder.scheme:

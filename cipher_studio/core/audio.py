@@ -88,6 +88,30 @@ def detect_scheme(block: np.ndarray) -> str:
     return "v3" if num / den > 0.5 else "v2"
 
 
+def find_block_start(samples: np.ndarray, max_shift: int) -> int | None:
+    """Onde começa um bloco v3 em `samples` (fluxo a 24 kHz), procurando de 0 a `max_shift`.
+
+    As margens espelhadas de cada fatia marcam o corte com precisão de uma amostra. Depois de um
+    salto, o áudio lido pode começar alguns milissegundos fora do ponto pedido; com as fatias
+    desencaixadas, cada emenda vira um estalo. Devolve None se o trecho não permitir medir (silêncio).
+    """
+    mono = samples.mean(axis=1) if samples.ndim == 2 else samples
+    if len(mono) < max_shift + BLOCK_SAMPLES:
+        return None
+    ramp = _GUARD_IN[::-1, 0]
+    starts = np.arange(GROUP_SIZE) * SLICE_SAMPLES
+    idx = starts[:, None] + np.arange(GUARD_SAMPLES)[None, :]
+    best, best_shift = 0.0, None
+    for shift in range(max_shift + 1):
+        guard = mono[shift + idx][:, ::-1]
+        expected = mono[shift + GUARD_SAMPLES + idx] * ramp
+        num = np.sum(guard * expected)
+        den = np.sqrt(np.sum(guard ** 2) * np.sum(expected ** 2)) + 1e-12
+        if num / den > best:
+            best, best_shift = num / den, shift
+    return best_shift if best > 0.8 else None
+
+
 def to_int16(samples: np.ndarray) -> np.ndarray:
     return np.clip(samples * 32768.0, -32768, 32767).astype(np.int16)
 

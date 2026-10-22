@@ -166,3 +166,63 @@ def test_seek_into_silence_keeps_audio_scheme(tmp_path):
     corr = np.dot(after, expected) / (np.linalg.norm(after) * np.linalg.norm(expected) + 1e-9)
     assert corr > 0.8, corr
     session.close()
+
+
+@needs_ffmpeg
+def test_seek_realigns_audio_blocks(tmp_path):
+    """Num salto o FFmpeg pode entregar o Opus alguns ms fora do ponto pedido; o servidor reencaixa."""
+    import numpy as np
+    from cipher_studio.core import media
+    from cipher_studio.web import live
+
+    src, enc, opus = tmp_path / "src.mp4", tmp_path / "enc.mp4", tmp_path / "opus.mkv"
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error",
+                    "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30:duration=20",
+                    "-f", "lavfi", "-i", "anoisesrc=d=20:c=pink:r=48000:a=0.3,lowpass=f=3000",
+                    "-c:v", "libx264", "-c:a", "aac", "-shortest", str(src)], check=True)
+    process_file("encode", str(src), str(enc), "senha", CipherSettings(),
+                 ExportSettings(resolution="720p", preset="veryfast"))
+    # Áudio em Opus, como o que o player recebe do YouTube.
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(enc), "-c:v", "copy",
+                    "-c:a", "libopus", "-b:a", "160k", str(opus)], check=True)
+    session = live.open_session(str(opus), "senha", CipherSettings(),
+                                ExportSettings(resolution="720p", preset="veryfast"), 640)
+    rate = 24000
+
+    def pcm(path):
+        reader = media.AudioReader(str(path), rate)
+        parts = []
+        while (part := reader.read(rate)) is not None:
+            parts.append(part)
+        reader.close()
+        return np.concatenate(parts)[:, 0]
+
+    ref = pcm(src)
+
+    def similarity(start):
+        stream = session.open_stream(start, "webm")
+        path = tmp_path / f"out_{start}.webm"
+        with open(path, "wb") as out:
+            while chunk := stream.read():
+                out.write(chunk)
+        got = pcm(path)[rate:6 * rate]
+        expected = ref[round((start + 1) * rate):round((start + 1) * rate) + len(got)]
+        return np.dot(got, expected) / (np.linalg.norm(got) * np.linalg.norm(expected) + 1e-9)
+
+    baseline = similarity(0)
+    assert baseline > 0.9
+    assert similarity(12.0) > baseline - 0.03
+    session.close()
+
+
+def test_find_block_start():
+    import numpy as np
+    from cipher_studio.core.audio import BLOCK_SAMPLES, CORE_BLOCK, CHANNELS, encode_block_v3, find_block_start
+
+    rng = np.random.default_rng(1)
+    blocks = [encode_block_v3(rng.standard_normal((CORE_BLOCK, CHANNELS)) * 0.1, np.arange(20)) for _ in range(2)]
+    stream = np.concatenate(blocks)
+    for offset in (0, 37, 1200):
+        padded = np.concatenate([rng.standard_normal((offset, CHANNELS)) * 0.1, stream])
+        assert find_block_start(padded, 2400) == offset
+    assert find_block_start(np.zeros((BLOCK_SAMPLES + 2400, CHANNELS)), 2400) is None
