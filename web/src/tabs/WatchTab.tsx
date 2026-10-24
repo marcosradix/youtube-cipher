@@ -1,4 +1,5 @@
 // Aba ▶ Assistir: decodifica vídeo e áudio ao vivo (no servidor) e toca no navegador.
+// No modo "vídeo comum" toca um link qualquer do YouTube como está, sem senha.
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { Config, SessionInfo } from "../api";
@@ -19,6 +20,7 @@ interface Props {
 export default function WatchTab({ config, updateConfig, format, active, goToSettings }: Props) {
   const [source, setSource] = useState<Source>(EMPTY_SOURCE);
   const [password, setPassword] = useState("");
+  const [plain, setPlain] = useState(false);
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [opening, setOpening] = useState(false);
   const [status, setStatus] = useState("pronto para reproduzir");
@@ -56,12 +58,13 @@ export default function WatchTab({ config, updateConfig, format, active, goToSet
   const start = async () => {
     if (opening || session) return;
     setError(null);
-    if (!source.text.trim() || !password) {
-      setError("Informe o link/arquivo de vídeo e a senha secreta.");
+    if (!source.text.trim() || (!plain && !password)) {
+      setError(plain ? "Informe o link/arquivo de vídeo." : "Informe o link/arquivo de vídeo e a senha secreta.");
       return;
     }
     if (!source.file && !isYoutubeUrl(source.text.trim())) {
-      setError("Cole um link do YouTube ou use 'Procurar arquivo' para escolher um vídeo codificado.");
+      setError(plain ? "Cole um link do YouTube ou use 'Procurar arquivo' para escolher um vídeo."
+        : "Cole um link do YouTube ou use 'Procurar arquivo' para escolher um vídeo codificado.");
       return;
     }
     if (!format) {
@@ -73,10 +76,11 @@ export default function WatchTab({ config, updateConfig, format, active, goToSet
     try {
       const ref = await resolveSource(source, setSource,
         (f) => setStatus(`enviando arquivo ao servidor: ${Math.round(f * 100)}%`));
-      setStatus(isYoutubeUrl(ref) ? "consultando o YouTube e derivando a chave..." : "lendo o arquivo e derivando a chave...");
+      setStatus(plain ? (isYoutubeUrl(ref) ? "consultando o YouTube..." : "lendo o arquivo...")
+        : isYoutubeUrl(ref) ? "consultando o YouTube e derivando a chave..." : "lendo o arquivo e derivando a chave...");
       // Como no desktop: decodifica na resolução da tela, então entrar em tela cheia não reabre o vídeo.
       const displayWidth = Math.round(window.screen.width * Math.min(2, window.devicePixelRatio || 1));
-      const info = await api.openSession(ref, password, config, displayWidth);
+      const info = await api.openSession(ref, password, config, displayWidth, plain);
       setStatus("carregando...");
       setSession(info);
     } catch (err) {
@@ -96,7 +100,7 @@ export default function WatchTab({ config, updateConfig, format, active, goToSet
     const now = performance.now();
     if (!session || now - lastStatus.current < 1000) return;
     lastStatus.current = now;
-    const verdict = verdictRef.current === true ? " · ✓ decodificação verificada"
+    const verdict = session.plain ? " · vídeo comum (sem cifra)" : verdictRef.current === true ? " · ✓ decodificação verificada"
       : verdictRef.current === false ? " · ⚠ imagem ainda embaralhada: confira senha, grade e inversão de cor" : "";
     const ahead = Math.max(0, s.buffered - s.position);
     setStatus(`${session.width}x${session.height} @ ${session.fps.toFixed(2)} fps · buffer ${ahead.toFixed(0)}s · ` +
@@ -106,23 +110,35 @@ export default function WatchTab({ config, updateConfig, format, active, goToSet
   return (
     <div className="tab watch-tab">
       <div className="card form-grid">
+        <label>Tipo de vídeo:</label>
+        <div className="row radios" role="radiogroup">
+          <label><input type="radio" name="watch-kind" checked={!plain} disabled={!!session || opening}
+                        onChange={() => setPlain(false)} /> 🔒 Cifrado (com senha)</label>
+          <label><input type="radio" name="watch-kind" checked={plain} disabled={!!session || opening}
+                        onChange={() => setPlain(true)} /> ▶ Vídeo comum (não cifrado)</label>
+        </div>
         <label>Link do YouTube ou arquivo:</label>
         <SourceField value={source} onChange={setSource} disabled={!!session || opening}
-                     placeholder="Cole a URL do YouTube ou escolha um vídeo codificado..."
+                     placeholder={plain ? "Cole a URL de qualquer vídeo do YouTube..."
+                       : "Cole a URL do YouTube ou escolha um vídeo codificado..."}
                      buttonText="Procurar arquivo" />
-        <label htmlFor="watch-password">Senha secreta:</label>
+        <label htmlFor="watch-password">{plain ? "" : "Senha secreta:"}</label>
         <div className="row">
-          <input id="watch-password" type="password" value={password} placeholder="A mesma senha usada na codificação..."
-                 autoComplete="current-password" onChange={(e) => setPassword(e.target.value)}
-                 onKeyDown={(e) => e.key === "Enter" && start()} />
+          {!plain && (
+            <input id="watch-password" type="password" value={password} placeholder="A mesma senha usada na codificação..."
+                   autoComplete="current-password" onChange={(e) => setPassword(e.target.value)}
+                   onKeyDown={(e) => e.key === "Enter" && start()} />
+          )}
           <button className="btn green" disabled={!!session || opening} onClick={start}>
             {opening ? "Abrindo…" : "▶ Assistir"}
           </button>
           <button className="btn red" disabled={!session} onClick={stop}>⏹ Parar</button>
         </div>
         <div className="summary muted">
-          Parâmetros: {describeCipher(config)}{" "}
-          (<button className="link" onClick={goToSettings}>altere em 🛠 Configurações</button>)
+          {plain ? "O vídeo é tocado como está no YouTube, sem senha e sem desembaralhar." : (
+            <>Parâmetros: {describeCipher(config)}{" "}
+              (<button className="link" onClick={goToSettings}>altere em 🛠 Configurações</button>)</>
+          )}
         </div>
       </div>
 
@@ -131,7 +147,7 @@ export default function WatchTab({ config, updateConfig, format, active, goToSet
       <Player
         session={session}
         format={format}
-        scramble={config.scramble_audio}
+        scramble={!session?.plain && config.scramble_audio}
         bufferSeconds={config.buffer_seconds}
         timelineStyle={config.timeline_style}
         volume={config.volume}

@@ -10,6 +10,9 @@ Os produtores trabalham à frente da reprodução — inclusive com o vídeo pau
 até encher o buffer configurado. Se o buffer esvaziar, áudio e vídeo param
 juntos e só retomam com alguns segundos carregados (sem tocar aos trancos).
 Saltos para dentro do trecho já carregado são instantâneos.
+
+No modo "vídeo comum" (plain) a mesma cadeia só repassa imagem e som, sem senha nem
+desembaralhamento: serve para assistir qualquer vídeo do YouTube neste player.
 """
 import io
 import math
@@ -24,10 +27,10 @@ from PIL import Image
 
 from . import media
 from .audio import AUDIO_LABEL, AUDIO_LABEL_V3, AUDIO_RATE, BLOCK_SAMPLES, CHANNELS, CORE_RATE, GROUP_SIZE, \
-    HOST_RATE, HalfbandResampler, RationalResampler, StreamDecoder
+    HOST_RATE, HalfbandResampler, RationalResampler, StreamDecoder, find_block_start
 from .keys import derive_key, permutation
 from .pipeline import CipherSettings, ExportSettings
-from .video import DecodeChecker, deblock, decode_geometry, transform_frame
+from .video import DecodeChecker, deblock, decode_geometry, plain_size, transform_frame
 
 BLOCK_SECONDS = BLOCK_SAMPLES / AUDIO_RATE
 START_BUFFER = 3.0       # segundos carregados para começar a tocar (o áudio chega em blocos de 5 s)
@@ -35,6 +38,8 @@ REBUFFER = 3.0           # segundos carregados para retomar após o buffer esvaz
 MAX_BUFFER_BYTES = 800 * 1024 * 1024
 JPEG_QUALITY = 90
 FADE_SECONDS = 0.01      # rampa de volume em pausas, buffer vazio e saltos
+# Depois de um salto o áudio é lido com esta folga antes do bloco, para achar o início exato dele.
+ALIGN_MARGIN = 0.05
 
 
 @dataclass
@@ -118,11 +123,12 @@ class LivePlayer:
     def __init__(self, source: str, password: str, cipher: CipherSettings, export: ExportSettings,
                  display_width: Callable[[], int],
                  on_frame: Callable[[Image.Image], None],
-                 on_done: Callable[[Exception | None], None]):
+                 on_done: Callable[[Exception | None], None], plain: bool = False):
         self.source = source
         self.password = password
-        self.cipher = cipher
-        self.export = export
+        self.plain = plain           # vídeo comum: repassa imagem e som sem desembaralhar
+        self.cipher = CipherSettings(cipher.grid, False, False) if plain else cipher
+        self.export = replace(export, deblock=False) if plain else export
         self.display_width = display_width
         self.on_frame = on_frame
         self.on_done = on_done
@@ -164,6 +170,9 @@ class LivePlayer:
         self._stream = None
         self._out_rate = HOST_RATE
         self._verdict: bool | None = None
+        # Formato do áudio (v2/v3), detectado no trecho que começa em 0 s. Um salto pode cair num
+        # trecho de silêncio, onde a detecção erra e decodifica tudo no formato errado (voz com eco).
+        self._audio_scheme: str | None = None
         self._video_maps: dict[str, np.ndarray] = {}
 
     # ---------------- controle (chamado pela interface) ----------------
@@ -326,14 +335,16 @@ class LivePlayer:
 
     def _play(self) -> None:
         youtube = media.is_youtube_url(self.source)
-        self._update(status="Derivando chave da senha...")
-        self._key = derive_key(self.password)
+        if not self.plain:
+            self._update(status="Derivando chave da senha...")
+            self._key = derive_key(self.password)
         self._update(status="Consultando o YouTube..." if youtube else "Lendo o arquivo...")
         self._src = (media.resolve_youtube_streams(self.source, self.export.yt_quality) if youtube
                      else media.local_streams(self.source))
         self._update(duration=self._src.info.duration)
-        _, self._inv_v2 = permutation(GROUP_SIZE, self._key, AUDIO_LABEL)
-        _, self._inv_v3 = permutation(GROUP_SIZE, self._key, AUDIO_LABEL_V3)
+        if not self.plain:
+            _, self._inv_v2 = permutation(GROUP_SIZE, self._key, AUDIO_LABEL)
+            _, self._inv_v3 = permutation(GROUP_SIZE, self._key, AUDIO_LABEL_V3)
         if self._src.audio:
             self._open_audio_output()
 
@@ -385,11 +396,14 @@ class LivePlayer:
     def _play_segment(self, start: float) -> str:
         gen = self._new_session(start)
         info = self._src.info
-        cols = decode_geometry(info.width, info.height, self.cipher.grid).cols
-        # Decodifica já no tamanho da tela (blocos menores = menos trabalho por quadro).
-        geom = decode_geometry(info.width, info.height, self.cipher.grid,
-                               max_block=max(2, self.display_width() // cols))
-        if geom.label not in self._video_maps:
+        if self.plain:
+            geom = plain_size(info.width, info.height, self.display_width())
+        else:
+            cols = decode_geometry(info.width, info.height, self.cipher.grid).cols
+            # Decodifica já no tamanho da tela (blocos menores = menos trabalho por quadro).
+            geom = decode_geometry(info.width, info.height, self.cipher.grid,
+                                   max_block=max(2, self.display_width() // cols))
+        if not self.plain and geom.label not in self._video_maps:
             self._video_maps[geom.label] = permutation(geom.n_blocks, self._key, geom.label)[1]
 
         self._update(position=start, ended=False, buffered=start)
@@ -397,13 +411,11 @@ class LivePlayer:
         threads: list[threading.Thread] = []
         try:
             if self._stream is not None:
-                scramble = self.cipher.scramble_audio
-                # Só blocos inteiros de 5 s podem ser desembaralhados: começa no início do bloco.
-                audio_start = math.floor(start / BLOCK_SECONDS) * BLOCK_SECONDS if scramble else start
-                audio_reader = media.AudioReader(self._src.audio, HOST_RATE, audio_start, self._src.headers)
+                audio_start, lead = self._audio_window(start)
+                audio_reader = media.AudioReader(self._src.audio, HOST_RATE, audio_start - lead, self._src.headers)
                 readers.append(audio_reader)
                 threads.append(threading.Thread(target=self._audio_producer,
-                                                args=(audio_reader, gen, start, audio_start), daemon=True))
+                                                args=(audio_reader, gen, start, audio_start, lead), daemon=True))
 
             vf = f"fps={info.fps},scale={geom.width}:{geom.height}:flags=area,setsar=1"
             video_reader = media.FrameReader(self._src.video, geom.width, geom.height, vf, start, self._src.headers)
@@ -428,6 +440,16 @@ class LivePlayer:
             for reader in readers:
                 reader.close()
 
+    def _audio_window(self, start: float) -> tuple[float, float]:
+        """Onde o áudio de um trecho começa a ser lido: (início do bloco, folga antes dele)."""
+        if not self.cipher.scramble_audio:
+            return start, 0.0
+        # Só blocos inteiros de 5 s podem ser desembaralhados: começa no início do bloco.
+        audio_start = math.floor(start / BLOCK_SECONDS) * BLOCK_SECONDS
+        # Num salto, o FFmpeg pode entregar o áudio alguns ms fora do ponto pedido: lê com folga
+        # e reencaixa pelas margens do v3 (o trecho a partir de 0 s não precisa).
+        return audio_start, (min(ALIGN_MARGIN, audio_start) if start > 0 else 0.0)
+
     def _buffer_full(self, until: float) -> bool:
         return until - self._clock.time() > self.buffer_seconds
 
@@ -435,9 +457,9 @@ class LivePlayer:
         return gen == self._gen and not self._stop.is_set() and not self._seek_pending()
 
     def _video_producer(self, reader: media.FrameReader, gen: int, geom, start: float, fps: float) -> None:
-        checker = DecodeChecker(geom) if self._verdict is None else None
+        checker = DecodeChecker(geom) if self._verdict is None and not self.plain else None
         check_every = max(1, round(fps))
-        inv_map = self._video_maps[geom.label]
+        inv_map = None if self.plain else self._video_maps[geom.label]
         idx = 0
         try:
             while self._keep_producing(gen):
@@ -458,7 +480,7 @@ class LivePlayer:
                             and self._request_reopen(gen, self._video_until):
                         return
                     break
-                decoded = transform_frame(frame, geom, inv_map, self.cipher.invert_colors)
+                decoded = frame if self.plain else transform_frame(frame, geom, inv_map, self.cipher.invert_colors)
                 if checker is not None and idx % check_every == 0:
                     checker.add(frame, decoded)
                     if checker.done:
@@ -485,9 +507,23 @@ class LivePlayer:
             if gen == self._gen:
                 self._producer_error = exc
 
-    def _audio_producer(self, reader: media.AudioReader, gen: int, start: float, audio_start: float) -> None:
+    def _align(self, chunk: np.ndarray, lead: float, scheme: str | None, start: float) -> np.ndarray:
+        """Descarta a folga lida antes do bloco; no v3, mede pelo áudio onde o bloco começa de fato."""
+        nominal = round(lead * AUDIO_RATE)
+        found = None
+        if scheme == "v3":
+            down = HalfbandResampler("down")
+            found = find_block_start(np.concatenate([down.process(chunk), down.flush()]), 2 * nominal)
+            if found is not None and found != nominal:
+                print(f"[áudio] salto para {start:.1f} s: reencaixado em "
+                      f"{(found - nominal) * 1000 / AUDIO_RATE:+.1f} ms", flush=True)
+        return chunk[2 * (nominal if found is None else found):]
+
+    def _audio_producer(self, reader: media.AudioReader, gen: int, start: float, audio_start: float,
+                        lead: float = 0.0) -> None:
         scramble = self.cipher.scramble_audio
-        decoder = StreamDecoder(self._inv_v2, self._inv_v3) if scramble else None
+        known = None if start == 0 else self._audio_scheme
+        decoder = StreamDecoder(self._inv_v2, self._inv_v3, known) if scramble else None
         to_host = None               # conversão para 48 kHz, criada quando o formato é conhecido
         skip_seconds = start - audio_start
         t = audio_start
@@ -526,7 +562,17 @@ class LivePlayer:
                     if not self._keep_producing(gen):
                         return  # interrompido por salto/parada
                     break
-                delivered = deliver(decoder.process(chunk), decoder.rate) if scramble else deliver(chunk, HOST_RATE)
+                if lead > 0:
+                    extra = reader.read(round(2 * lead * HOST_RATE))
+                    if extra is not None:
+                        chunk = np.concatenate([chunk, extra])
+                    chunk, lead = self._align(chunk, lead, decoder.scheme, start), 0.0
+                if scramble:
+                    delivered = deliver(decoder.process(chunk), decoder.rate)
+                    if start == 0 and decoder.scheme:
+                        self._audio_scheme = decoder.scheme
+                else:
+                    delivered = deliver(chunk, HOST_RATE)
                 if not delivered:
                     return
             else:
@@ -618,7 +664,7 @@ class LivePlayer:
 
             if last_shown_wall - last_status > 1.0:
                 last_status = last_shown_wall
-                verdict = {True: " · ✓ decodificação verificada",
+                verdict = " · vídeo comum (sem cifra)" if self.plain else {True: " · ✓ decodificação verificada",
                            False: " · ⚠ imagem ainda embaralhada: confira senha, grade e inversão de cor",
                            None: ""}[self._verdict]
                 ahead = max(0.0, self._buffered_until() - pts)

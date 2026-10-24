@@ -121,9 +121,10 @@ class State:
 
 class SessionRequest(BaseModel):
     source: str                 # URL do YouTube ou "upload:<id>"
-    password: str
+    password: str = ""
     config: dict = {}
     display_width: int = 1920
+    plain: bool = False         # vídeo comum (não cifrado): dispensa a senha
 
 
 class JobRequest(BaseModel):
@@ -354,13 +355,13 @@ def create_app(work_dir: Path | None = None) -> FastAPI:
 
     @app.post("/api/sessions")
     async def create_session(req: SessionRequest):
-        if not req.password:
+        if not req.password and not req.plain:
             raise ApiError(400, "Informe a senha secreta.")
         cipher, export = _settings(req.config)
         source = resolve_source(req.source)
         try:
             session = await asyncio.to_thread(live.open_session, source, req.password, cipher, export,
-                                              req.display_width)
+                                              req.display_width, req.plain)
         except (media.MediaError, ValueError) as exc:
             raise ApiError(400, str(exc))
         with state.lock:

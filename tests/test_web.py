@@ -246,3 +246,25 @@ def test_find_block_start():
         padded = np.concatenate([rng.standard_normal((offset, CHANNELS)) * 0.1, stream])
         assert find_block_start(padded, 2400) == offset
     assert find_block_start(np.zeros((BLOCK_SAMPLES + 2400, CHANNELS)), 2400) is None
+
+
+@needs_ffmpeg
+def test_plain_video_plays_without_password(client, tmp_path):
+    """Vídeo comum (não cifrado): sem senha, imagem repassada como está."""
+    src = tmp_path / "comum.mp4"
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error",
+                    "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=4",
+                    "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(src)], check=True)
+    source = _upload(client, src)
+    assert client.post("/api/sessions", json={"source": source, "password": ""}).status_code == 400
+    session = client.post("/api/sessions", json={"source": source, "plain": True, "config": CONFIG,
+                                                 "display_width": 1920}).json()
+    assert session["plain"] is True
+    assert (session["width"], session["height"]) == (640, 360)   # não amplia além do original
+    for start in (0, 2.5):
+        res = client.get(f"/api/sessions/{session['id']}/stream?start={start}&fmt=webm")
+        assert res.status_code == 200
+        assert len(res.content) > 10_000
+    assert client.get(f"/api/sessions/{session['id']}").json()["verdict"] is None
+    client.delete(f"/api/sessions/{session['id']}")
