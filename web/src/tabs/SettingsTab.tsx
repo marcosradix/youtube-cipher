@@ -84,7 +84,8 @@ function YoutubeCookies({ initial }: { initial: CookiesStatus }) {
       <div className="summary muted">
         Como obter: no computador, abra o YouTube numa janela anônima, faça login, instale a extensão
         "Get cookies.txt LOCALLY" e exporte os cookies de youtube.com (envie o arquivo ou cole o conteúdo
-        dele acima; a exportação em JSON de extensões como "Cookie-Editor" também serve); depois feche a janela anônima sem
+        dele acima; a exportação em JSON de extensões como "Cookie-Editor" ou o cabeçalho "Cookie" no formato
+        nome=valor; nome=valor também servem); depois feche a janela anônima sem
         sair da conta. Enviados por aqui, valem até o servidor reiniciar; para mantê-los após novos deploys,
         coloque o conteúdo do arquivo na variável CIPHER_YT_COOKIES do Railway.
       </div>
