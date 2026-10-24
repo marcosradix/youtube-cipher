@@ -175,6 +175,9 @@ docker run -p 8000:8000 -e CIPHER_WEB_PASSWORD=uma-senha-de-acesso cipher-web
   ferramentas de desenvolvedor, no formato `nome=valor; nome=valor`, e texto em que as tabulações
   viraram espaços). Para mantê-los após reinícios, coloque o conteúdo (texto ou base64) na variável
   `CIPHER_YT_COOKIES`, que sobrevive a novos deploys. No desktop, o mesmo arquivo pode ser indicado em `CIPHER_YT_COOKIES_FILE`.
+  **Pelo celular:** no Android, o **Firefox** aceita essas extensões de copiar cookies (testado):
+  instale a extensão no Firefox do celular, faça login no YouTube, copie ou exporte os cookies e cole
+  o texto em **🛠 Configurações → YouTube no servidor** pelo próprio celular. Dispensa computador.
 - Arquivos enviados e resultados são apagados após 24 h (`CIPHER_WEB_RETENTION_HOURS`); o limite
   de envio é 4 GB (`CIPHER_WEB_MAX_UPLOAD_MB`).
 - O servidor decodifica e recodifica o vídeo em tempo real enquanto alguém assiste, então cada

@@ -89,6 +89,10 @@ function YoutubeCookies({ initial }: { initial: CookiesStatus }) {
         sair da conta. Enviados por aqui, valem até o servidor reiniciar; para mantê-los após novos deploys,
         coloque o conteúdo do arquivo na variável CIPHER_YT_COOKIES do Railway.
       </div>
+      <div className="summary muted">
+        Pelo celular: no Android, o Firefox aceita essas extensões. Instale a extensão no Firefox do celular,
+        faça login no YouTube, copie os cookies e cole o texto no campo acima.
+      </div>
     </Section>
   );
 }
