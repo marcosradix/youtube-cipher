@@ -115,12 +115,14 @@ def test_youtube_cookies_pasted_text_variants(client):
     spaced = COOKIES.replace("\t", "  ").replace("\n", "\r\n")
     exported = json.dumps([{"domain": ".youtube.com", "name": "SID", "value": "abc", "path": "/",
                             "secure": True, "httpOnly": True, "expirationDate": 1893456000.5}])
-    for text in (spaced, exported):
+    header = "Cookie: YSC=x1; SID=abc; PREF=f6=80&tz=Europe.Lisbon"
+    for text in (spaced, exported, header):
         assert client.put("/api/youtube-cookies", content=text.encode()).json()["configured"] is True
         args = media._youtube_auth_args()
         saved = open(args[1]).read()
         media._cleanup_auth_args(args)
-        assert "\tTRUE\t/\tTRUE\t1893456000\tSID\tabc" in saved, saved
+        assert ".youtube.com\tTRUE\t/\tTRUE\t" in saved and "\tSID\tabc" in saved, saved
+    assert "\tPREF\tf6=80&tz=Europe.Lisbon" in saved
     assert client.put("/api/youtube-cookies", content=b'[{"foo": 1}]').status_code == 400
     client.delete("/api/youtube-cookies")
 

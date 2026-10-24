@@ -173,8 +173,21 @@ def _cookies_from_json(text: bytes) -> bytes | None:
     return "\n".join(lines).encode()
 
 
+def _cookies_from_header(text: bytes) -> bytes | None:
+    """Converte o cabeçalho Cookie copiado do navegador ("nome=valor; nome=valor") para o formato Netscape."""
+    if text[:7].lower() == b"cookie:":
+        text = text[7:]
+    pairs = [part.strip().split(b"=", 1) for part in text.split(b";") if part.strip()]
+    if not pairs or any(len(pair) != 2 or not pair[0] or b" " in pair[0] for pair in pairs):
+        return None
+    expires = str(int(time.time()) + 365 * 24 * 3600).encode()
+    lines = [b"\t".join([b".youtube.com", b"TRUE", b"/", b"TRUE", expires, name.strip(), value.strip()])
+             for name, value in pairs]
+    return b"# Netscape HTTP Cookie File\n" + b"\n".join(lines)
+
+
 def _parse_cookies(data: bytes) -> bytes:
-    """Aceita cookies.txt (formato Netscape), puro ou em base64, ou a exportação em JSON.
+    """Aceita cookies.txt (formato Netscape), puro ou em base64, a exportação em JSON ou o cabeçalho Cookie.
 
     Texto colado no navegador às vezes chega com espaços no lugar das tabulações; isso também é aceito.
     """
@@ -186,6 +199,8 @@ def _parse_cookies(data: bytes) -> bytes:
             pass
     if text[:1] in (b"[", b"{"):
         text = _cookies_from_json(text) or text
+    elif b"\t" not in text and b"\n" not in text and b"=" in text:
+        text = _cookies_from_header(text) or text
     lines = []
     for line in text.splitlines():
         line = line.strip()
@@ -196,8 +211,8 @@ def _parse_cookies(data: bytes) -> bytes:
         lines.append(line)
     rows = [line.split(b"\t") for line in lines]
     if not rows or any(len(row) != 7 for row in rows) or not any(b"youtube.com" in row[0] for row in rows):
-        raise ApiError(400, "Cookies inválidos: envie ou cole o cookies.txt (formato Netscape) exportado com o "
-                            "YouTube aberto e logado.")
+        raise ApiError(400, "Cookies inválidos: envie ou cole o cookies.txt (formato Netscape), o JSON "
+                            "exportado ou o cabeçalho Cookie, com o YouTube aberto e logado.")
     return b"# Netscape HTTP Cookie File\n" + b"\n".join(lines) + b"\n"
 
 
