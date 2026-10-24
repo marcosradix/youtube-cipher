@@ -49,6 +49,20 @@ class Geometry:
         return f"video:{self.cols}x{self.rows}"
 
 
+@dataclass(frozen=True)
+class PlainSize:
+    """Tamanho de exibição de um vídeo comum (sem cifra): não há grade, só largura e altura."""
+    width: int
+    height: int
+
+
+def plain_size(src_w: int, src_h: int, display_width: int) -> PlainSize:
+    """Cabe na largura da tela mantendo a proporção, sem ampliar; dimensões pares (H.264)."""
+    w = min(max(160, int(display_width)), src_w)
+    h = round(src_h * w / src_w)
+    return PlainSize(w - w % 2, max(2, h - h % 2))
+
+
 def _oriented_grid(grid: str, portrait: bool) -> tuple[int, int]:
     if grid not in GRID_PRESETS:
         raise ValueError(f"Grade desconhecida: {grid}")

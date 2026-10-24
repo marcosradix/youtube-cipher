@@ -11,6 +11,9 @@ O navegador recebe os fragmentos por Media Source Extensions e controla o buffer
 quando ele para de ler, os pipes enchem e toda a cadeia espera (inclusive a leitura
 do YouTube). Cada salto para fora do trecho carregado abre um fluxo novo a partir do
 instante pedido; os carimbos de tempo começam em zero e o navegador os desloca.
+
+No modo "vídeo comum" (plain) a mesma cadeia só repassa imagem e som, sem desembaralhar:
+serve para assistir qualquer vídeo do YouTube no player do app, sem senha.
 """
 import math
 import os
@@ -19,7 +22,7 @@ import sys
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -28,7 +31,7 @@ from ..core.audio import AUDIO_LABEL, AUDIO_LABEL_V3, BLOCK_SAMPLES, AUDIO_RATE,
     GROUP_SIZE, HOST_RATE, HalfbandResampler, RationalResampler, StreamDecoder, find_block_start
 from ..core.keys import derive_key, permutation
 from ..core.pipeline import CipherSettings, ExportSettings
-from ..core.video import DecodeChecker, Geometry, deblock, decode_geometry, transform_frame
+from ..core.video import DecodeChecker, Geometry, PlainSize, deblock, decode_geometry, plain_size, transform_frame
 
 BLOCK_SECONDS = BLOCK_SAMPLES / AUDIO_RATE
 MAX_DISPLAY_WIDTH = 3840
@@ -65,7 +68,7 @@ class LiveSession:
     key: bytes
     cipher: CipherSettings
     export: ExportSettings
-    geometry: Geometry
+    geometry: Geometry | PlainSize
     inv_video: np.ndarray
     inv_v2: np.ndarray
     inv_v3: np.ndarray
@@ -73,6 +76,7 @@ class LiveSession:
     # Formato do áudio (v2/v3), detectado no fluxo que começa em 0 s. Um salto pode cair num
     # trecho de silêncio, onde a detecção erra e decodifica tudo no formato errado (voz com eco).
     audio_scheme: str | None = None
+    plain: bool = False         # vídeo comum: repassa imagem e som sem desembaralhar
     last_used: float = field(default_factory=time.monotonic)
     _stream: "LiveStream | None" = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -81,7 +85,7 @@ class LiveSession:
         info, g = self.source.info, self.geometry
         return {"id": self.id, "duration": info.duration, "width": g.width, "height": g.height,
                 "fps": info.fps_float, "has_audio": info.has_audio, "verdict": self.verdict,
-                "source_width": info.width, "source_height": info.height}
+                "source_width": info.width, "source_height": info.height, "plain": self.plain}
 
     def open_stream(self, start: float, fmt: str) -> "LiveStream":
         """Abre um fluxo a partir de `start`; o anterior desta sessão é encerrado (o mais novo vence)."""
@@ -102,15 +106,22 @@ class LiveSession:
 
 
 def open_session(source: str, password: str, cipher: CipherSettings, export: ExportSettings,
-                 display_width: int) -> LiveSession:
-    """`source` = URL do YouTube ou caminho de um arquivo já enviado ao servidor."""
-    key = derive_key(password)
+                 display_width: int, plain: bool = False) -> LiveSession:
+    """`source` = URL do YouTube ou caminho de um arquivo já enviado ao servidor.
+
+    Com `plain`, o vídeo é tocado como está (sem senha nem desembaralhamento)."""
     src = (media.resolve_youtube_streams(source, export.yt_quality) if media.is_youtube_url(source)
            else media.local_streams(source))
     info = src.info
+    width = max(160, min(MAX_DISPLAY_WIDTH, int(display_width)))
+    if plain:
+        size = plain_size(info.width, info.height, width)
+        none = np.zeros(0, dtype=np.int64)
+        return LiveSession(uuid.uuid4().hex, src, b"", CipherSettings(cipher.grid, False, False),
+                           replace(export, deblock=False), size, none, none, none, plain=True)
+    key = derive_key(password)
     cols = decode_geometry(info.width, info.height, cipher.grid).cols
     # Como no desktop: decodifica no tamanho da tela (blocos menores = menos trabalho por quadro).
-    width = max(160, min(MAX_DISPLAY_WIDTH, int(display_width)))
     geom = decode_geometry(info.width, info.height, cipher.grid, max_block=max(2, width // cols))
     inv_video = permutation(geom.n_blocks, key, geom.label)[1]
     _, inv_v2 = permutation(GROUP_SIZE, key, AUDIO_LABEL)
@@ -217,7 +228,7 @@ class LiveStream:
     def _video_worker(self, reader: media.FrameReader) -> None:
         s = self.session
         g = s.geometry
-        checker = DecodeChecker(g) if s.verdict is None else None
+        checker = DecodeChecker(g) if s.verdict is None and not s.plain else None
         check_every = max(1, round(s.source.info.fps_float))
         idx = 0
         try:
@@ -227,6 +238,10 @@ class LiveStream:
                     if idx == 0 and not self._closed.is_set():
                         self.error = reader.error_text() or "Nenhum quadro foi lido do vídeo."
                     break
+                if s.plain:
+                    self._encoder.stdin.write(frame.tobytes())
+                    idx += 1
+                    continue
                 decoded = transform_frame(frame, g, s.inv_video, s.cipher.invert_colors)
                 if checker is not None and idx % check_every == 0:
                     checker.add(frame, decoded)

@@ -143,20 +143,34 @@ class YouTubeCipherApp(ctk.CTk):
         top.pack(fill="x", padx=10, pady=8)
         top.columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(top, text="Link do YouTube ou arquivo:").grid(row=0, column=0, padx=10, pady=8, sticky="w")
+        # Cifrado (com senha) ou vídeo comum: um link qualquer do YouTube tocado como está.
+        ctk.CTkLabel(top, text="Tipo de vídeo:").grid(row=0, column=0, padx=10, pady=(8, 0), sticky="w")
+        kind = ctk.CTkFrame(top, fg_color="transparent")
+        kind.grid(row=0, column=1, columnspan=2, padx=5, pady=(8, 0), sticky="w")
+        self.watch_plain_var = ctk.BooleanVar(value=False)
+        self.watch_kind_buttons = [
+            ctk.CTkRadioButton(kind, text="🔒 Cifrado (com senha)", variable=self.watch_plain_var, value=False,
+                               command=self._refresh_watch_kind),
+            ctk.CTkRadioButton(kind, text="▶ Vídeo comum (não cifrado)", variable=self.watch_plain_var, value=True,
+                               command=self._refresh_watch_kind),
+        ]
+        for button in self.watch_kind_buttons:
+            button.pack(side="left", padx=(0, 18))
+
+        ctk.CTkLabel(top, text="Link do YouTube ou arquivo:").grid(row=1, column=0, padx=10, pady=8, sticky="w")
         self.watch_source_entry = ctk.CTkEntry(
             top, placeholder_text="Cole a URL do YouTube ou escolha um vídeo codificado...")
-        self.watch_source_entry.grid(row=0, column=1, padx=5, pady=8, sticky="ew")
+        self.watch_source_entry.grid(row=1, column=1, padx=5, pady=8, sticky="ew")
         ctk.CTkButton(top, text="Procurar arquivo", width=140,
-                      command=self._browse_watch_file).grid(row=0, column=2, padx=10, pady=8)
+                      command=self._browse_watch_file).grid(row=1, column=2, padx=10, pady=8)
 
-        ctk.CTkLabel(top, text="Senha secreta:").grid(row=1, column=0, padx=10, pady=8, sticky="w")
+        ctk.CTkLabel(top, text="Senha secreta:").grid(row=2, column=0, padx=10, pady=8, sticky="w")
         self.watch_key_entry = ctk.CTkEntry(top, placeholder_text="A mesma senha usada na codificação...", show="*")
-        self.watch_key_entry.grid(row=1, column=1, padx=5, pady=8, sticky="ew")
+        self.watch_key_entry.grid(row=2, column=1, padx=5, pady=8, sticky="ew")
         self.watch_key_entry.bind("<Return>", lambda _e: self.start_live_player())
 
         buttons = ctk.CTkFrame(top, fg_color="transparent")
-        buttons.grid(row=1, column=2, padx=10, pady=8)
+        buttons.grid(row=2, column=2, padx=10, pady=8)
         self.btn_play = ctk.CTkButton(buttons, text="▶ Assistir", width=90, fg_color=GREEN,
                                       hover_color=GREEN_HOVER, command=self.start_live_player)
         self.btn_play.pack(side="left", padx=(0, 4))
@@ -165,7 +179,7 @@ class YouTubeCipherApp(ctk.CTk):
         self.btn_stop.pack(side="left")
 
         self.watch_summary = ctk.CTkLabel(top, text="", text_color=MUTED, anchor="w")
-        self.watch_summary.grid(row=2, column=0, columnspan=3, padx=10, pady=(0, 6), sticky="w")
+        self.watch_summary.grid(row=3, column=0, columnspan=3, padx=10, pady=(0, 6), sticky="w")
 
         # Painel do player: vídeo + barra de controles, tudo em fundo escuro.
         self.player_panel = ctk.CTkFrame(self.tab_watch, fg_color=BAR_BG, corner_radius=10)
@@ -492,7 +506,9 @@ class YouTubeCipherApp(ctk.CTk):
         if not hasattr(self, "convert_summary"):
             return
         cipher, export = to_settings(self._current_config())
-        self.watch_summary.configure(text=f"Parâmetros: {cipher.describe()}  (altere em 🛠 Configurações)")
+        self.watch_summary.configure(
+            text="O vídeo é tocado como está no YouTube, sem senha e sem desembaralhar."
+            if self.watch_plain_var.get() else f"Parâmetros: {cipher.describe()}  (altere em 🛠 Configurações)")
         extra = f" · saída {export.resolution}" if self.convert_mode_var.get() == "encode" else ""
         self.convert_summary.configure(text=f"Parâmetros: {cipher.describe()}{extra}")
 
@@ -620,13 +636,20 @@ class YouTubeCipherApp(ctk.CTk):
     # PLAYER AO VIVO
     # ------------------------------------------------------------------
 
+    def _refresh_watch_kind(self) -> None:
+        plain = self.watch_plain_var.get()
+        self.watch_key_entry.configure(state="disabled" if plain else "normal")
+        self._refresh_summaries()
+
     def start_live_player(self) -> None:
         if self.player is not None:
             return
         source = self.watch_source_entry.get().strip()
         password = self.watch_key_entry.get()
-        if not source or not password:
-            messagebox.showwarning("Aviso", "Informe o link/arquivo de vídeo e a senha secreta.")
+        plain = self.watch_plain_var.get()
+        if not source or (not password and not plain):
+            messagebox.showwarning("Aviso", "Informe o link/arquivo de vídeo." if plain
+                                   else "Informe o link/arquivo de vídeo e a senha secreta.")
             return
         if not media.is_url(source) and not os.path.isfile(source):
             messagebox.showwarning("Arquivo", "O vídeo não foi encontrado.")
@@ -639,10 +662,12 @@ class YouTubeCipherApp(ctk.CTk):
             # exige reabrir o vídeo (o que interrompia o som por alguns segundos).
             display_width=self.winfo_screenwidth,
             on_frame=self._on_player_frame,
-            on_done=lambda error: self._ui(self._player_finished, error))
+            on_done=lambda error: self._ui(self._player_finished, error), plain=plain)
         self.player.volume = float(self.volume_slider.get())
         self.btn_play.configure(state="disabled")
         self.btn_stop.configure(state="normal")
+        for button in self.watch_kind_buttons:
+            button.configure(state="disabled")
         for button in (self.btn_back, self.btn_pause, self.btn_forward):
             button.configure(state="normal")
         self.video_canvas.reset()
@@ -721,6 +746,8 @@ class YouTubeCipherApp(ctk.CTk):
     def _player_finished(self, error: Exception | None) -> None:
         self.player = None
         self.btn_play.configure(state="normal")
+        for button in self.watch_kind_buttons:
+            button.configure(state="normal")
         self.btn_stop.configure(state="disabled")
         for button in (self.btn_back, self.btn_pause, self.btn_forward):
             button.configure(state="disabled")

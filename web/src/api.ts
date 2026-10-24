@@ -42,6 +42,7 @@ export interface SessionInfo {
   fps: number;
   has_audio: boolean;
   verdict: boolean | null;
+  plain?: boolean;
   error?: string | null;
 }
 
@@ -86,8 +87,8 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
 
 export const api = {
   info: () => request<ServerInfo>("GET", "/api/info"),
-  openSession: (source: string, password: string, config: Config, displayWidth: number) =>
-    request<SessionInfo>("POST", "/api/sessions", { source, password, config, display_width: displayWidth }),
+  openSession: (source: string, password: string, config: Config, displayWidth: number, plain = false) =>
+    request<SessionInfo>("POST", "/api/sessions", { source, password, config, display_width: displayWidth, plain }),
   session: (id: string) => request<SessionInfo>("GET", `/api/sessions/${id}`),
   closeSession: (id: string) => request<unknown>("DELETE", `/api/sessions/${id}`),
   streamUrl: (id: string, start: number, fmt: string) =>

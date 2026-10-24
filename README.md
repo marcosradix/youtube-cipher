@@ -115,9 +115,20 @@ A aba **▶ Assistir** decodifica vídeo e áudio em memória e oferece:
 | F ou duplo clique no vídeo | Tela cheia |
 | Esc | Sair da tela cheia |
 
+### Vídeo comum (não cifrado)
+
+No topo da aba **▶ Assistir**, em **Tipo de vídeo**, escolha **▶ Vídeo comum (não cifrado)** para
+assistir qualquer vídeo do YouTube (ou um arquivo comum) no player do app, sem senha: o vídeo é
+tocado como está, sem desembaralhar, com a mesma linha do tempo, buffer à frente, saltos e tela
+cheia. Como o app lê só a imagem e o som do vídeo, os anúncios do YouTube não aparecem. A opção
+existe no app desktop e na versão web, com o mesmo funcionamento. Para voltar aos vídeos
+embaralhados, marque **🔒 Cifrado (com senha)**.
+
 Ao saltar, o áudio recomeça no início do bloco de 5 s que contém o instante escolhido
 (só blocos inteiros podem ser desembaralhados) e descarta o trecho anterior, então som e imagem
-continuam sincronizados. Em links do YouTube, cada salto leva de 1 a 5 s, dependendo da rede.
+continuam sincronizados. Em links do YouTube, cada salto leva de 1 a 5 s, dependendo da rede. O player lembra o formato do
+áudio detectado no início do vídeo (um salto que cai num trecho de silêncio não o confunde) e, depois
+de cada salto, reencaixa os blocos de áudio na posição exata, sem estalos — igual na versão web.
 
 ## Versão web
 
