@@ -34,13 +34,15 @@ function Switch({ checked, onChange, label }: { checked: boolean; onChange: (v: 
 function YoutubeCookies({ initial }: { initial: CookiesStatus }) {
   const [status, setStatus] = useState(initial);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [pasted, setPasted] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const upload = async (file: File | undefined) => {
-    if (!file) return;
+  const upload = async (content: File | string | undefined) => {
+    if (!content) return;
     try {
-      setStatus(await api.uploadCookies(file));
+      setStatus(await api.uploadCookies(content));
       setMessage({ ok: true, text: "Cookies salvos. Tente abrir o link do YouTube de novo." });
+      if (typeof content === "string") setPasted("");
     } catch (err) {
       setMessage({ ok: false, text: (err as Error).message });
     }
@@ -69,10 +71,20 @@ function YoutubeCookies({ initial }: { initial: CookiesStatus }) {
         <input ref={inputRef} type="file" accept=".txt,text/plain" hidden
                onChange={(e) => { void upload(e.target.files?.[0]); e.target.value = ""; }} />
       </div>
+      <label htmlFor="cookies-text">Ou cole o texto:</label>
+      <div className="cookies-paste">
+        <textarea id="cookies-text" rows={5} spellCheck={false} autoComplete="off" value={pasted}
+                  placeholder={"# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t…"}
+                  onChange={(e) => setPasted(e.target.value)} />
+        <button className="btn" disabled={!pasted.trim()} onClick={() => void upload(pasted)}>
+          Salvar cookies colados
+        </button>
+      </div>
       {message && <div className={`summary ${message.ok ? "ok-text" : "error-text"}`}>{message.text}</div>}
       <div className="summary muted">
         Como obter: no computador, abra o YouTube numa janela anônima, faça login, instale a extensão
-        "Get cookies.txt LOCALLY" e exporte os cookies de youtube.com; depois feche a janela anônima sem
+        "Get cookies.txt LOCALLY" e exporte os cookies de youtube.com (envie o arquivo ou cole o conteúdo
+        dele acima; a exportação em JSON de extensões como "Cookie-Editor" também serve); depois feche a janela anônima sem
         sair da conta. Enviados por aqui, valem até o servidor reiniciar; para mantê-los após novos deploys,
         coloque o conteúdo do arquivo na variável CIPHER_YT_COOKIES do Railway.
       </div>

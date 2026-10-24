@@ -10,6 +10,7 @@ Com CIPHER_WEB_PASSWORD definido, todo acesso pede usuário/senha (HTTP Basic).
 import asyncio
 import base64
 import hmac
+import json
 import os
 import re
 import shutil
@@ -147,20 +148,57 @@ def _settings(config: dict):
     return to_settings(merged)
 
 
+def _cookies_from_json(text: bytes) -> bytes | None:
+    """Converte a exportação em JSON (extensões tipo Cookie-Editor) para o formato Netscape."""
+    try:
+        items = json.loads(text)
+    except ValueError:
+        return None
+    if isinstance(items, dict):
+        items = items.get("cookies")
+    if not isinstance(items, list):
+        return None
+    lines = ["# Netscape HTTP Cookie File"]
+    for item in items:
+        if not isinstance(item, dict) or not item.get("domain") or not item.get("name"):
+            return None
+        domain = str(item["domain"])
+        prefix = "#HttpOnly_" if item.get("httpOnly") else ""
+        expires = item.get("expirationDate") or item.get("expires") or 0
+        lines.append("\t".join([
+            prefix + domain, "TRUE" if domain.startswith(".") else "FALSE", str(item.get("path") or "/"),
+            "TRUE" if item.get("secure") else "FALSE", str(int(float(expires))),
+            str(item["name"]), str(item.get("value", "")),
+        ]))
+    return "\n".join(lines).encode()
+
+
 def _parse_cookies(data: bytes) -> bytes:
-    """Aceita cookies.txt (formato Netscape), puro ou em base64; recusa qualquer outra coisa."""
-    text = data.strip()
+    """Aceita cookies.txt (formato Netscape), puro ou em base64, ou a exportação em JSON.
+
+    Texto colado no navegador às vezes chega com espaços no lugar das tabulações; isso também é aceito.
+    """
+    text = data.strip().lstrip(b"\xef\xbb\xbf")
     if b"\t" not in text:
         try:
             text = base64.b64decode(text, validate=True).strip()
         except ValueError:
             pass
-    lines = [line for line in text.splitlines() if line.strip() and not line.startswith(b"# ")]
-    rows = [line.split(b"\t") for line in lines if not line.startswith(b"#") or line.startswith(b"#HttpOnly_")]
+    if text[:1] in (b"[", b"{"):
+        text = _cookies_from_json(text) or text
+    lines = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or (line.startswith(b"#") and not line.startswith(b"#HttpOnly_")):
+            continue
+        if b"\t" not in line:
+            line = b"\t".join(line.split(None, 6))
+        lines.append(line)
+    rows = [line.split(b"\t") for line in lines]
     if not rows or any(len(row) != 7 for row in rows) or not any(b"youtube.com" in row[0] for row in rows):
-        raise ApiError(400, "Arquivo inválido: envie o cookies.txt (formato Netscape) exportado com o "
+        raise ApiError(400, "Cookies inválidos: envie ou cole o cookies.txt (formato Netscape) exportado com o "
                             "YouTube aberto e logado.")
-    return text + b"\n"
+    return b"# Netscape HTTP Cookie File\n" + b"\n".join(lines) + b"\n"
 
 
 def _safe_name(name: str, default: str) -> str:

@@ -158,9 +158,11 @@ docker run -p 8000:8000 -e CIPHER_WEB_PASSWORD=uma-senha-de-acesso cipher-web
 - O servidor só abre links do YouTube ou arquivos enviados pela própria página.
 - **"Sign in to confirm you're not a bot"**: o YouTube costuma bloquear IPs de datacenter (Railway,
   VPS). Exporte o `cookies.txt` de uma conta logada (de preferência secundária) com a extensão
-  "Get cookies.txt LOCALLY", numa janela anônima, e envie em **🛠 Configurações → YouTube no
-  servidor**, ou coloque o conteúdo (texto ou base64) na variável `CIPHER_YT_COOKIES`, que sobrevive
-  a novos deploys. No desktop, o mesmo arquivo pode ser indicado em `CIPHER_YT_COOKIES_FILE`.
+  "Get cookies.txt LOCALLY", numa janela anônima, e envie o arquivo em **🛠 Configurações → YouTube
+  no servidor**, ou cole o conteúdo dele no campo **"Ou cole o texto"** da mesma seção (também aceita
+  a exportação em JSON de extensões como "Cookie-Editor", e texto em que as tabulações viraram
+  espaços). Para mantê-los após reinícios, coloque o conteúdo (texto ou base64) na variável
+  `CIPHER_YT_COOKIES`, que sobrevive a novos deploys. No desktop, o mesmo arquivo pode ser indicado em `CIPHER_YT_COOKIES_FILE`.
 - Arquivos enviados e resultados são apagados após 24 h (`CIPHER_WEB_RETENTION_HOURS`); o limite
   de envio é 4 GB (`CIPHER_WEB_MAX_UPLOAD_MB`).
 - O servidor decodifica e recodifica o vídeo em tempo real enquanto alguém assiste, então cada

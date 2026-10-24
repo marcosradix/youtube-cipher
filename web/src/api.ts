@@ -97,8 +97,8 @@ export const api = {
   job: (id: string) => request<JobInfo>("GET", `/api/jobs/${id}`),
   cancelJob: (id: string) => request<JobInfo>("POST", `/api/jobs/${id}/cancel`),
   deleteCookies: () => request<CookiesStatus>("DELETE", "/api/youtube-cookies"),
-  async uploadCookies(file: File): Promise<CookiesStatus> {
-    const res = await fetch("/api/youtube-cookies", { method: "PUT", body: file });
+  async uploadCookies(content: File | string): Promise<CookiesStatus> {
+    const res = await fetch("/api/youtube-cookies", { method: "PUT", body: content });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `Erro ${res.status}`);
     return data as CookiesStatus;

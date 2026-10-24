@@ -62,7 +62,12 @@ input[type="text"], input[type="password"], select {
   padding: 6px 9px; font: inherit; min-width: 0; width: 100%;
 }
 select { width: auto; max-width: 100%; }
-input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid #3b8ed0; outline-offset: 1px; }
+textarea {
+  background: var(--input); color: var(--text); border: 2px solid var(--input-border); border-radius: 6px;
+  padding: 6px 9px; font: 12px/1.4 ui-monospace, monospace; width: 100%; resize: vertical; white-space: pre;
+}
+.cookies-paste { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; min-width: 0; }
+input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible { outline: 2px solid #3b8ed0; outline-offset: 1px; }
 input:disabled { opacity: 0.6; }
 
 button, .btn {

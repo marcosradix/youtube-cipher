@@ -107,6 +107,24 @@ def test_youtube_cookies_upload_and_use(client):
     assert media._youtube_auth_args() == []
 
 
+def test_youtube_cookies_pasted_text_variants(client):
+    """Texto colado: tabulações viram espaços, CRLF, e a exportação em JSON do Cookie-Editor."""
+    import json
+    from cipher_studio.core import media
+
+    spaced = COOKIES.replace("\t", "  ").replace("\n", "\r\n")
+    exported = json.dumps([{"domain": ".youtube.com", "name": "SID", "value": "abc", "path": "/",
+                            "secure": True, "httpOnly": True, "expirationDate": 1893456000.5}])
+    for text in (spaced, exported):
+        assert client.put("/api/youtube-cookies", content=text.encode()).json()["configured"] is True
+        args = media._youtube_auth_args()
+        saved = open(args[1]).read()
+        media._cleanup_auth_args(args)
+        assert "\tTRUE\t/\tTRUE\t1893456000\tSID\tabc" in saved, saved
+    assert client.put("/api/youtube-cookies", content=b'[{"foo": 1}]').status_code == 400
+    client.delete("/api/youtube-cookies")
+
+
 def test_youtube_cookies_from_env_base64(tmp_path, monkeypatch):
     import base64
     from cipher_studio.core import media
