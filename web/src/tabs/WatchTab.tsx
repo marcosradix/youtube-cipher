@@ -6,8 +6,9 @@ import type { Config, SessionInfo } from "../api";
 import Player from "../components/Player";
 import SourceField, { EMPTY_SOURCE, resolveSource } from "../components/SourceField";
 import type { Source } from "../components/SourceField";
+import TvShortcut from "../components/TvShortcut";
 import type { PlayerSnapshot } from "../player/engine";
-import { describeCipher, isYoutubeUrl } from "../settings";
+import { describeCipher, isYoutubeUrl, takeTvPlay } from "../settings";
 
 interface Props {
   config: Config;
@@ -15,9 +16,10 @@ interface Props {
   format: { name: string; mime: string } | null;
   active: boolean;
   goToSettings: () => void;
+  accessProtected: boolean;
 }
 
-export default function WatchTab({ config, updateConfig, format, active, goToSettings }: Props) {
+export default function WatchTab({ config, updateConfig, format, active, goToSettings, accessProtected }: Props) {
   const [source, setSource] = useState<Source>(EMPTY_SOURCE);
   const [password, setPassword] = useState("");
   const [plain, setPlain] = useState(false);
@@ -27,6 +29,19 @@ export default function WatchTab({ config, updateConfig, format, active, goToSet
   const [error, setError] = useState<string | null>(null);
   const verdictRef = useRef<boolean | null>(null);
   const lastStatus = useRef(0);
+  const [autoStart, setAutoStart] = useState(false);
+
+  // Aberto pelo atalho para TV (página /tv): preenche os campos e começa sozinho.
+  useEffect(() => {
+    const tv = takeTvPlay();
+    if (!tv) return;
+    setPlain(tv.plain);
+    setSource({ text: tv.source, file: null, uploadId: null });
+    setPassword(tv.password);
+    if (Object.keys(tv.config).length) updateConfig(tv.config);
+    setAutoStart(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Veredito da decodificação (✓/⚠) e erros do servidor, consultados enquanto o vídeo está aberto.
   useEffect(() => {
@@ -91,6 +106,13 @@ export default function WatchTab({ config, updateConfig, format, active, goToSet
     }
   };
 
+  useEffect(() => {
+    if (!autoStart) return;
+    setAutoStart(false);
+    void start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStart]);
+
   const stop = () => {
     setSession(null);
     setStatus("reprodução finalizada");
@@ -141,6 +163,9 @@ export default function WatchTab({ config, updateConfig, format, active, goToSet
           )}
         </div>
       </div>
+
+      <TvShortcut source={source.file ? "" : source.text} password={password} plain={plain} config={config}
+                  accessProtected={accessProtected} />
 
       {error && <div className="alert error" role="alert">{error}<button className="close" onClick={() => setError(null)}>×</button></div>}
 

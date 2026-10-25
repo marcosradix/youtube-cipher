@@ -1,0 +1,76 @@
+<!doctype html>
+<!-- Entrada do atalho para TV: faz o login com a senha do site e abre a aba Assistir já preenchida.
+     Os dados vêm no fragmento (#...), que o navegador não envia ao servidor nem grava nos logs. -->
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>YouTube Cipher Studio — TV</title>
+<style>
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+         background: #111; color: #eee; font: 24px/1.4 Helvetica, Arial, sans-serif; text-align: center; }
+  main { max-width: 900px; padding: 24px; }
+  .error { color: #f87171; }
+  a { color: #8b5cf6; }
+</style>
+</head>
+<body>
+<main>
+  <p id="msg">Entrando…</p>
+  <noscript><p class="error">Ative o JavaScript neste navegador para usar o atalho.</p></noscript>
+</main>
+<script>
+(function () {
+  var msg = document.getElementById("msg");
+  function fail(text) {
+    msg.className = "error";
+    msg.innerHTML = "";
+    msg.appendChild(document.createTextNode(text + " "));
+    var link = document.createElement("a");
+    link.href = "/";
+    link.textContent = "Abrir o site";
+    msg.appendChild(link);
+  }
+  var params = {};
+  location.hash.replace(/^#/, "").split("&").forEach(function (pair) {
+    if (!pair) return;
+    var i = pair.indexOf("=");
+    var key = decodeURIComponent((i < 0 ? pair : pair.slice(0, i)).replace(/\+/g, " "));
+    params[key] = i < 0 ? "" : decodeURIComponent(pair.slice(i + 1).replace(/\+/g, " "));
+  });
+  // Tira as senhas da barra de endereço e do histórico assim que foram lidas.
+  try { history.replaceState(null, "", location.pathname); } catch (e) { /* segue mesmo assim */ }
+
+  var play = null;
+  if (params.v) {
+    play = { source: params.v, password: params.s || "", plain: params.m === "plain", config: {} };
+    if (params.g) play.config.grid = params.g;
+    if (params.i) play.config.invert_colors = params.i === "1";
+    if (params.au) play.config.scramble_audio = params.au === "1";
+  }
+
+  var xhr = new XMLHttpRequest();
+  xhr.open("POST", "/api/login");
+  xhr.setRequestHeader("Content-Type", "application/json");
+  xhr.onload = function () {
+    if (xhr.status !== 200) {
+      var text = "Não foi possível entrar.";
+      try { text = JSON.parse(xhr.responseText).error || text; } catch (e) { /* resposta sem JSON */ }
+      fail(text + " Gere o atalho de novo com a senha certa.");
+      return;
+    }
+    try {
+      if (play) sessionStorage.setItem("youtube-cipher-studio.tv", JSON.stringify(play));
+    } catch (e) {
+      fail("Este navegador bloqueou o armazenamento da página; entre e preencha o link manualmente.");
+      return;
+    }
+    location.replace("/");
+  };
+  xhr.onerror = function () { fail("Sem conexão com o servidor."); };
+  xhr.send(JSON.stringify({ password: params.a || "" }));
+})();
+</script>
+</body>
+</html>

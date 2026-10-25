@@ -163,3 +163,7 @@ button.link:hover:not(:disabled) { background: none; }
 }
 .ok-text { color: #4ade80; }
 .error-text { color: #f87171; }
+
+.tv-shortcut summary { cursor: pointer; font-weight: 600; }
+.tv-shortcut[open] summary { margin-bottom: 8px; }
+.tv-shortcut p { margin: 8px 0; }

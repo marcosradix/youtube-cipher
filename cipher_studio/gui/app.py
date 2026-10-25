@@ -21,7 +21,7 @@ from ..core import media
 from ..core.pipeline import Cancelled, process_file
 from ..core.player import LivePlayer
 from .fullscreen import FullscreenView
-from .player_widgets import BAR_BG, TIMELINE_STYLES, Timeline, VideoCanvas, format_time, fullscreen_icon
+from .player_widgets import BAR_BG, MEDIA_KEYS, TIMELINE_STYLES, Timeline, VideoCanvas, format_time, fullscreen_icon
 from .tutorial import SECTIONS
 
 STYLE_LABELS = {key: label for key, (label, _accent) in TIMELINE_STYLES.items()}
@@ -791,6 +791,13 @@ class YouTubeCipherApp(ctk.CTk):
         self.bind("<Left>", handler(lambda: self._seek_relative(-10)))
         self.bind("<Right>", handler(lambda: self._seek_relative(10)))
         self.bind("<KeyPress-f>", handler(self.toggle_fullscreen))
+        # Enter e teclas de mídia, como na versão web (controle remoto / teclado multimídia).
+        self.bind("<Return>", handler(self.toggle_pause))
+        for keysym, action in MEDIA_KEYS.items():
+            try:
+                self.bind(f"<{keysym}>", handler(lambda a=action: a(self)))
+            except tk.TclError:
+                pass                # sistema sem esse keysym (ex.: XF86* fora do X11)
 
     # ------------------------------------------------------------------
 

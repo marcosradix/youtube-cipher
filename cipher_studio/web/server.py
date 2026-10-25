@@ -5,7 +5,8 @@
 - /api/uploads: vídeos enviados pelo navegador (o servidor não enxerga os arquivos do usuário)
 
 A senha trafega até o servidor, que é quem decodifica: publique sempre atrás de HTTPS.
-Com CIPHER_WEB_PASSWORD definido, todo acesso pede usuário/senha (HTTP Basic).
+Com CIPHER_WEB_PASSWORD definido, todo acesso pede usuário/senha (HTTP Basic) ou o cookie de login
+gravado por /api/login — é o que usa a página /tv, aberta pelo atalho HTML do pen-drive (ver tv.html).
 """
 import asyncio
 import base64
@@ -40,6 +41,10 @@ MAX_UPLOAD_BYTES = int(float(os.environ.get("CIPHER_WEB_MAX_UPLOAD_MB", "4096"))
 DIST_DIR = Path(os.environ.get("CIPHER_WEB_DIST", Path(__file__).resolve().parents[2] / "web" / "dist"))
 PRESETS = ["veryfast", "fast", "medium", "slow"]
 BUFFER_CHOICES = [30, 60, 120, 300]
+AUTH_COOKIE = "cipher_auth"
+AUTH_COOKIE_MAX_AGE = 90 * 24 * 3600
+PUBLIC_PATHS = {"/tv", "/api/login"}    # liberadas sem login: a página /tv faz o login ela mesma
+TV_PAGE = Path(__file__).with_name("tv.html")
 
 
 class ApiError(HTTPException):
@@ -125,6 +130,10 @@ class SessionRequest(BaseModel):
     config: dict = {}
     display_width: int = 1920
     plain: bool = False         # vídeo comum (não cifrado): dispensa a senha
+
+
+class LoginRequest(BaseModel):
+    password: str
 
 
 class JobRequest(BaseModel):
@@ -217,6 +226,11 @@ def _parse_cookies(data: bytes) -> bytes:
     return b"# Netscape HTTP Cookie File\n" + b"\n".join(lines) + b"\n"
 
 
+def _login_token(access_password: str) -> str:
+    """Valor do cookie de login: derivado da senha, então trocar a senha derruba os logins antigos."""
+    return hmac.new(access_password.encode(), b"youtube-cipher-studio login", "sha256").hexdigest()
+
+
 def _safe_name(name: str, default: str) -> str:
     name = re.sub(r"[^\w.\- ()\[\]]+", "_", Path(name or "").name).strip(" .")
     return name or default
@@ -245,10 +259,11 @@ def create_app(work_dir: Path | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def basic_auth(request: Request, call_next):
-        if access_password:
+        if access_password and request.url.path not in PUBLIC_PATHS:
             header = request.headers.get("authorization", "")
-            ok = False
-            if header.lower().startswith("basic "):
+            cookie = request.cookies.get(AUTH_COOKIE, "")
+            ok = bool(cookie) and hmac.compare_digest(cookie.encode(), _login_token(access_password).encode())
+            if not ok and header.lower().startswith("basic "):
                 try:
                     _, _, given = base64.b64decode(header[6:]).decode("utf-8").partition(":")
                     ok = hmac.compare_digest(given.encode(), access_password.encode())
@@ -297,7 +312,29 @@ def create_app(work_dir: Path | None = None) -> FastAPI:
             "tutorial": [{"title": title, "body": body} for title, body in SECTIONS],
             "max_upload_mb": MAX_UPLOAD_BYTES // (1024 * 1024),
             "youtube_cookies": youtube_cookies_status(),
+            "access_protected": bool(access_password),
         }
+
+    # ---------------- atalho para TV ----------------
+
+    @app.get("/tv")
+    def tv_page():
+        # Página sem segredos: lê senha/link do fragmento (#), que o navegador não envia ao servidor.
+        return FileResponse(TV_PAGE, media_type="text/html; charset=utf-8",
+                            headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+
+    @app.post("/api/login")
+    async def login(req: LoginRequest, request: Request):
+        response = JSONResponse({"ok": True})
+        if not access_password:
+            return response
+        if not hmac.compare_digest(req.password.encode(), access_password.encode()):
+            await asyncio.sleep(1)      # freia tentativas de adivinhar a senha
+            raise ApiError(401, "Senha de acesso ao site incorreta.")
+        https = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
+        response.set_cookie(AUTH_COOKIE, _login_token(access_password), max_age=AUTH_COOKIE_MAX_AGE,
+                            httponly=True, samesite="lax", secure=https)
+        return response
 
     # ---------------- cookies do YouTube ----------------
 

@@ -111,6 +111,8 @@ A aba **▶ Assistir** decodifica vídeo e áudio em memória e oferece:
 | Atalho | Ação |
 |---|---|
 | Espaço ou clique no vídeo | Pausar / continuar |
+| Enter / OK do controle remoto, ⏯ (tecla de mídia) | Pausar / continuar |
+| ⏪ / ⏩ (teclas de mídia) | Voltar / avançar 10 s |
 | ← / → | Voltar / avançar 10 s |
 | F ou duplo clique no vídeo | Tela cheia |
 | Esc | Sair da tela cheia |
@@ -135,7 +137,7 @@ de cada salto, reencaixa os blocos de áudio na posição exata, sem estalos —
 A mesma ferramenta no navegador: as quatro abas do desktop (**▶ Assistir**, **⚙️ Converter**,
 **🛠 Configurações** e **📖 Tutorial**), com o mesmo player (linha do tempo nos cinco estilos,
 buffer à frente inclusive pausado, saltos instantâneos dentro do trecho carregado, tela cheia com
-controles que somem, atalhos Espaço, ←/→, F e Esc) e a mesma verificação **✓ decodificação verificada**.
+controles que somem, atalhos Espaço/Enter, ←/→, teclas de mídia, F e Esc) e a mesma verificação **✓ decodificação verificada**.
 
 **Como funciona:** um servidor Python (FastAPI) usa o mesmo núcleo (`cipher_studio/core`), e a
 interface é React. O navegador não consegue rodar o `yt-dlp` nem ler os fluxos do YouTube, então
@@ -165,7 +167,8 @@ docker run -p 8000:8000 -e CIPHER_WEB_PASSWORD=uma-senha-de-acesso cipher-web
 
 - **Use HTTPS.** A senha do vídeo vai até o servidor, que é quem decodifica.
 - **`CIPHER_WEB_PASSWORD`** exige usuário/senha (HTTP Basic, qualquer usuário) em todo o site.
-  Sem ela, qualquer pessoa com o endereço usa o servidor, inclusive a CPU dele.
+  Sem ela, qualquer pessoa com o endereço usa o servidor, inclusive a CPU dele. O atalho para TV
+  (abaixo) entra com a mesma senha por um cookie de login; trocar a senha invalida os atalhos antigos.
 - O servidor só abre links do YouTube ou arquivos enviados pela própria página.
 - **"Sign in to confirm you're not a bot"**: o YouTube costuma bloquear IPs de datacenter (Railway,
   VPS). Exporte o `cookies.txt` de uma conta logada (de preferência secundária) com a extensão
@@ -182,6 +185,25 @@ docker run -p 8000:8000 -e CIPHER_WEB_PASSWORD=uma-senha-de-acesso cipher-web
   de envio é 4 GB (`CIPHER_WEB_MAX_UPLOAD_MB`).
 - O servidor decodifica e recodifica o vídeo em tempo real enquanto alguém assiste, então cada
   espectador ocupa CPU do servidor. Numa máquina modesta, escolha 720p em **🛠 Configurações**.
+
+### Atalho para TV (pen-drive)
+
+Para assistir na TV sem digitar nada com o controle remoto: na aba **▶ Assistir**, preencha o link
+do YouTube e a senha secreta (ou escolha **Vídeo comum**), abra **📺 Atalho para TV (pen-drive)**
+logo abaixo do player, digite a senha de acesso ao site e clique em **⬇ Baixar atalho HTML**. Copie
+o `assistir-na-tv.html` para um pen-drive e abra-o no navegador da TV: ele vai para o site, faz o
+login sozinho, preenche os campos (com a grade, a inversão de cor e o áudio usados na hora de gerar)
+e já começa o vídeo. Se a TV bloquear o som automático, o player fica pausado: aperte **OK**, **▶**
+ou **⏯** no controle (Enter e as teclas de mídia também pausam/retomam; ⏪/⏩ saltam 10 s).
+Desmarcando "Incluir o vídeo", o atalho só faz o login e abre a aba Assistir.
+
+- **As senhas ficam no arquivo, em texto legível.** Quem pegar o pen-drive consegue entrar no site e
+  assistir ao vídeo: guarde-o como guardaria a senha. Para cortar o acesso, troque `CIPHER_WEB_PASSWORD`.
+- No caminho, os dados vão só no **fragmento** do endereço (`/tv#...`), que o navegador não envia ao
+  servidor: nada aparece nos logs do Railway. A página `/tv` lê o fragmento, apaga-o da barra de
+  endereço e do histórico, faz `POST /api/login` (cookie `HttpOnly`, válido por 90 dias) e abre o site.
+- O atalho é só da versão web: o app desktop roda no próprio computador e não tem um endereço para a
+  TV abrir.
 
 ## Solução de problemas
 
