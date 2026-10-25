@@ -350,3 +350,12 @@ class VideoCanvas(tk.Canvas):
                                 outline="#ffffff", width=5, tags="overlay")
                 self.create_polygon(cx + 4, cy - 23, cx + 15, cy - 13, cx + 2, cy - 9, fill="#ffffff",
                                     outline="#ffffff", joinstyle=tk.ROUND, width=2, tags="overlay")
+
+
+# Teclas de mídia (keysyms do X11) e a ação no player; usadas também na tela cheia.
+MEDIA_KEYS = {
+    "XF86AudioPlay": lambda app: app.toggle_pause(),
+    "XF86AudioPause": lambda app: app.toggle_pause(),
+    "XF86AudioForward": lambda app: app._seek_relative(10),
+    "XF86AudioRewind": lambda app: app._seek_relative(-10),
+}

@@ -212,8 +212,16 @@ export default function Player(props: Props) {
       const el = e.target as HTMLElement;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT")) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+      // Enter e as teclas de mídia servem para o controle remoto da TV (Enter num botão já o aciona).
+      if (e.key === "Enter" && (el?.tagName === "BUTTON" || el?.tagName === "A" || el?.tagName === "SUMMARY")) return;
       const actions: Record<string, () => void> = {
         " ": togglePause,
+        Enter: togglePause,
+        MediaPlayPause: togglePause,
+        MediaPlay: () => engineRef.current?.snapshot().paused && togglePause(),
+        MediaPause: () => engineRef.current?.snapshot().paused === false && togglePause(),
+        MediaFastForward: () => seekRelative(10),
+        MediaRewind: () => seekRelative(-10),
         ArrowLeft: () => seekRelative(-10),
         ArrowRight: () => seekRelative(10),
         f: toggleFullscreen,

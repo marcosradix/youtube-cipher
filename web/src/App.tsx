@@ -79,7 +79,7 @@ export default function App() {
         {/* As abas ficam montadas: trocar de aba não interrompe o vídeo nem a conversão. */}
         <div hidden={tab !== "watch"}>
           <WatchTab config={config} updateConfig={updateConfig} format={format} active={tab === "watch"}
-                    goToSettings={() => setTab("settings")} />
+                    goToSettings={() => setTab("settings")} accessProtected={info.access_protected} />
         </div>
         <div hidden={tab !== "convert"}><ConvertTab config={config} /></div>
         <div hidden={tab !== "settings"}><SettingsTab info={info} config={config} updateConfig={updateConfig} /></div>

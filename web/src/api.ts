@@ -27,6 +27,7 @@ export interface ServerInfo {
   tutorial: { title: string; body: string }[];
   max_upload_mb: number;
   youtube_cookies: CookiesStatus;
+  access_protected: boolean;
 }
 
 export interface CookiesStatus {

@@ -8,7 +8,7 @@ import tkinter as tk
 
 import customtkinter as ctk
 
-from .player_widgets import BAR_BG, PLAYER_BG, Timeline, VideoCanvas, fullscreen_icon
+from .player_widgets import BAR_BG, MEDIA_KEYS, PLAYER_BG, Timeline, VideoCanvas, fullscreen_icon
 
 HIDE_AFTER_MS = 2500
 
@@ -62,6 +62,12 @@ class FullscreenView(tk.Toplevel):
         self.bind("<Escape>", lambda _e: app.toggle_fullscreen())
         self.bind("<KeyPress-f>", lambda _e: app.toggle_fullscreen())
         self.bind("<space>", lambda _e: (self.show_controls(), app.toggle_pause()))
+        self.bind("<Return>", lambda _e: (self.show_controls(), app.toggle_pause()))
+        for keysym, action in MEDIA_KEYS.items():
+            try:
+                self.bind(f"<{keysym}>", lambda _e, a=action: (self.show_controls(), a(app)))
+            except tk.TclError:
+                pass
         self.bind("<Left>", lambda _e: (self.show_controls(), app._seek_relative(-10)))
         self.bind("<Right>", lambda _e: (self.show_controls(), app._seek_relative(10)))
         self.protocol("WM_DELETE_WINDOW", app.toggle_fullscreen)

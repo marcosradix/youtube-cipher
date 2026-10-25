@@ -268,3 +268,28 @@ def test_plain_video_plays_without_password(client, tmp_path):
         assert len(res.content) > 10_000
     assert client.get(f"/api/sessions/{session['id']}").json()["verdict"] is None
     client.delete(f"/api/sessions/{session['id']}")
+
+
+def test_tv_shortcut_login_sets_cookie(tmp_path, monkeypatch):
+    monkeypatch.setenv("CIPHER_WEB_PASSWORD", "acesso")
+    client = TestClient(create_app(tmp_path))
+    assert client.get("/api/info").status_code == 401
+    # A página /tv e o login ficam abertos: são eles que fazem a entrada pelo atalho.
+    page = client.get("/tv")
+    assert page.status_code == 200 and "/api/login" in page.text
+    assert client.post("/api/login", json={"password": "errada"}).status_code == 401
+    assert client.get("/api/info").status_code == 401
+    res = client.post("/api/login", json={"password": "acesso"})
+    assert res.status_code == 200 and "httponly" in res.headers["set-cookie"].lower()
+    info = client.get("/api/info")
+    assert info.status_code == 200 and info.json()["access_protected"] is True
+    # Cookie forjado não passa; o HTTP Basic continua funcionando.
+    other = TestClient(create_app(tmp_path))
+    other.cookies.set("cipher_auth", "x" * 64)
+    assert other.get("/api/info").status_code == 401
+    assert other.get("/api/info", auth=("u", "acesso")).status_code == 200
+
+
+def test_tv_login_without_site_password(client):
+    assert client.post("/api/login", json={"password": ""}).status_code == 200
+    assert client.get("/api/info").json()["access_protected"] is False

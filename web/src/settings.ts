@@ -55,3 +55,65 @@ export function formatTime(seconds: number, reference = 0): string {
 export function isYoutubeUrl(text: string): boolean {
   return /^https?:\/\//.test(text) && /(youtube\.com|youtu\.be)\//.test(text);
 }
+
+// ---------------- atalho para TV ----------------
+
+/** O que o atalho do pen-drive pede para tocar (gravado pela página /tv do servidor, ver tv.html). */
+export interface TvPlay {
+  source: string;
+  password: string;
+  plain: boolean;
+  config: Partial<Config>;
+}
+
+const TV_KEY = "youtube-cipher-studio.tv";
+
+/** Lê e apaga o pedido do atalho para TV: só vale para a primeira abertura da página. */
+export function takeTvPlay(): TvPlay | null {
+  try {
+    const raw = sessionStorage.getItem(TV_KEY);
+    sessionStorage.removeItem(TV_KEY);
+    return raw ? (JSON.parse(raw) as TvPlay) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Endereço que faz login e abre o vídeo; os dados vão no fragmento (#), que não chega ao servidor. */
+export function tvShortcutUrl(origin: string, accessPassword: string, play: TvPlay | null): string {
+  const params = new URLSearchParams();
+  if (accessPassword) params.set("a", accessPassword);
+  if (play) {
+    params.set("v", play.source);
+    if (play.plain) {
+      params.set("m", "plain");
+    } else {
+      params.set("s", play.password);
+      const { grid, invert_colors, scramble_audio } = play.config;
+      if (grid) params.set("g", grid);
+      if (invert_colors !== undefined) params.set("i", invert_colors ? "1" : "0");
+      if (scramble_audio !== undefined) params.set("au", scramble_audio ? "1" : "0");
+    }
+  }
+  return `${origin}/tv#${params.toString()}`;
+}
+
+/** Arquivo HTML autônomo (para o pen-drive) que só redireciona para o endereço acima. */
+export function tvShortcutHtml(url: string, title: string): string {
+  const attr = (text: string) => text.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  const js = JSON.stringify(url).replace(/</g, "\\u003c");
+  return `<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>${attr(title)}</title>
+</head>
+<body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#111;color:#eee;font:24px/1.4 Helvetica,Arial,sans-serif;text-align:center">
+<p>Abrindo o YouTube Cipher Studio…<br><br><a href="${attr(url)}" style="color:#8b5cf6">Clique aqui se não abrir sozinho</a></p>
+<script>location.replace(${js});</script>
+</body>
+</html>
+`;
+}
